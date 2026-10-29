@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sala Simples</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Tela de entrada -->
+  <section id="entrada">
+    <div class="card">
+      <h1>Sala Simples</h1>
+      <p class="sub">Chat, voz, tela e arquivos direto entre os navegadores. Nada é gravado.</p>
+      <label>Seu nome
+        <input id="nome" maxlength="20" placeholder="Como quer aparecer?">
+      </label>
+      <label>Código da sala
+        <input id="codigo" maxlength="30" placeholder="ex: amigos-123">
+      </label>
+      <button id="btn-entrar">Entrar</button>
+      <button id="btn-gerar" class="sec">Gerar código aleatório</button>
+    </div>
+  </section>
+
+  <!-- Aplicação -->
+  <main id="app" hidden>
+    <header>
+      <div>
+        <strong>Sala: <span id="sala-nome"></span></strong>
+        <span id="status" class="muted"></span>
+      </div>
+      <div id="pessoas" class="muted"></div>
+      <button id="btn-copiar" class="sec">Copiar link da sala</button>
+    </header>
+
+    <div class="layout">
+      <section id="palco">
+        <div id="videos"></div>
+        <div id="vazio" class="muted">Nenhuma tela sendo transmitida.</div>
+        <div id="controles">
+          <button id="btn-voz">🎤 Entrar no voice chat</button>
+          <button id="btn-mudo" class="sec" disabled>Silenciar</button>
+          <button id="btn-tela">🖥️ Compartilhar tela</button>
+        </div>
+        <div id="audios"></div>
+      </section>
+
+      <aside id="chat">
+        <div id="mensagens"></div>
+        <form id="form">
+          <label class="anexo" title="Enviar arquivo">📎
+            <input type="file" id="arquivo" hidden>
+          </label>
+          <input id="texto" autocomplete="off" placeholder="Digite uma mensagem...">
+          <button type="submit">Enviar</button>
+        </form>
+      </aside>
+    </div>
+  </main>
+
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

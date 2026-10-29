@@ -2,7 +2,7 @@
 
 Uma sala de conversa minimalista que roda inteira no navegador: **chat, canal de voz, compartilhamento de tela e envio de arquivos grandes**, sem cadastro, sem servidor próprio e sem guardar nada.
 
-🔗 **Acesse:** https://SEU-USUARIO.github.io/NOME-DO-REPOSITORIO/
+🔗 **Acesse:** https://GuChape.github.io/Sala-Simples/
 
 ## Funcionalidades
 
@@ -63,10 +63,6 @@ python -m http.server 8000
 ```
 
 Depois abra `http://localhost:8000`.
-
-## Publicação
-
-O projeto é estático e pode ser publicado no GitHub Pages: em **Settings → Pages**, escolha **Deploy from a branch**, a branch `main` e a pasta `/ (root)`.
 
 ## Tecnologias
 

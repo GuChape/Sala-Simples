@@ -6,6 +6,7 @@ Uma sala de conversa minimalista que roda inteira no navegador: **chat, canal de
 
 ## Funcionalidades
 
+- **Cor e emoji para cada pessoa:** ao entrar, você recebe uma cor e um emoji aleatórios que aparecem ao lado do seu nome no chat. Em uma mesma sala, duas pessoas nunca ficam com a mesma cor.
 - **Salas por código:** basta compartilhar o link (`...#codigo-da-sala`) para outras pessoas entrarem.
 - **Chat em tempo real:** as mensagens existem só enquanto a aba está aberta. Nada é gravado.
 - **Canal de voz:** entrar, sair e silenciar o microfone.

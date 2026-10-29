@@ -32,6 +32,15 @@ const CONFIG_PEER = {
   }
 };
 
+// Uma cor por vaga da sala (6 vagas = 6 cores). Como cada vaga só pode ser
+// ocupada por uma pessoa, ninguém na mesma sala repete cor, e a cor volta a
+// ficar livre quando a pessoa sai. Salas diferentes não interferem entre si.
+const PALETA = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#c084fc'];
+
+// Emoji sorteado para cada pessoa ao entrar.
+const EMOJIS = ['🐶', '🐱', '🦊', '🐼', '🐸', '🐵', '🦁', '🐯', '🐨', '🐙',
+  '🦄', '🐢', '🦉', '🐧', '🦋', '🐳', '🦖', '🐝', '🦔', '🐰'];
+
 const $ = (id) => document.getElementById(id);
 
 let peer = null;        // meu Peer
@@ -40,6 +49,10 @@ let sala = '';
 let meuNome = '';
 let micStream = null;
 let telaStream = null;
+let meuEmoji = '🙂';
+
+// conexões que tentei abrir e ainda não responderam: id -> timer de aviso
+const pendentes = new Map();
 
 // id do outro peer -> { id, nome, conn, saida: {voice, screen}, anunciado }
 const pares = new Map();
@@ -49,6 +62,25 @@ const recebendo = new Map();
 /* ---------------------------- Utilidades ---------------------------- */
 
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function corDoSlot(slot) {
+  return PALETA[(slot - 1) % PALETA.length];
+}
+
+// O número da vaga é o final do ID do peer: "<prefixo><sala>-<vaga>"
+function corDoId(id) {
+  return corDoSlot(parseInt(id.split('-').pop(), 10) || 1);
+}
+
+// Ordem aleatória das vagas, para a cor de cada pessoa ser sorteada
+function ordemAleatoriaDeVagas() {
+  const v = Array.from({ length: MAX_SLOTS }, (_, i) => i + 1);
+  for (let i = v.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [v[i], v[j]] = [v[j], v[i]];
+  }
+  return v;
+}
 
 function formatarTamanho(bytes) {
   if (bytes < 1024) return bytes + ' B';
@@ -70,11 +102,12 @@ function sistema(texto) {
   rolarChat();
 }
 
-function adicionarMensagem(autor, texto, propria) {
+function adicionarMensagem(autor, texto, propria, cor, emoji) {
   const d = document.createElement('div');
   d.className = 'msg' + (propria ? ' propria' : '');
   const a = document.createElement('strong');
-  a.textContent = autor;
+  a.textContent = (emoji ? emoji + ' ' : '') + autor;
+  if (cor) a.style.color = cor;
   const t = document.createElement('span');
   t.textContent = texto; // textContent evita injeção de HTML
   d.append(a, t);
@@ -83,9 +116,17 @@ function adicionarMensagem(autor, texto, propria) {
 }
 
 function atualizarPessoas() {
-  const nomes = [meuNome + ' (você)'];
-  pares.forEach((p) => nomes.push(p.nome));
-  $('pessoas').textContent = nomes.join(', ');
+  const el = $('pessoas');
+  el.textContent = '';
+  const lista = [{ nome: meuNome + ' (você)', emoji: meuEmoji, cor: corDoSlot(meuSlot) }];
+  pares.forEach((p) => lista.push(p));
+  lista.forEach((p, i) => {
+    if (i) el.append(', ');
+    const s = document.createElement('span');
+    s.textContent = p.emoji + ' ' + p.nome;
+    s.style.color = p.cor;
+    el.appendChild(s);
+  });
 }
 
 function atualizarPalcoVazio() {
@@ -112,16 +153,19 @@ function entrar() {
   $('app').hidden = false;
   $('sala-nome').textContent = sala;
   $('status').textContent = 'Conectando...';
-  abrirPeer(1);
+  meuEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+  abrirPeer(ordemAleatoriaDeVagas(), 0);
 }
 
-function abrirPeer(slot) {
-  if (slot > MAX_SLOTS) {
+// Tenta as vagas na ordem sorteada até achar uma livre.
+function abrirPeer(ordem, indice) {
+  if (indice >= ordem.length) {
     $('status').textContent = 'Sala cheia.';
     sistema('A sala está cheia (máximo de ' + MAX_SLOTS + ' pessoas).');
     return;
   }
 
+  const slot = ordem[indice];
   const p = new Peer(PREFIXO + sala + '-' + slot, CONFIG_PEER);
 
   p.on('open', () => {
@@ -147,9 +191,15 @@ function abrirPeer(slot) {
   p.on('error', (err) => {
     if (err.type === 'unavailable-id') {
       p.destroy();
-      abrirPeer(slot + 1); // vaga ocupada, tenta a próxima
+      abrirPeer(ordem, indice + 1); // vaga ocupada, tenta a próxima
     } else if (err.type === 'peer-unavailable') {
-      // vaga vazia: normal, ignora
+      // vaga vazia: normal. Só para de esperar resposta dela.
+      pendentes.forEach((timer, idPendente) => {
+        if (err.message && err.message.includes(idPendente)) {
+          clearTimeout(timer);
+          pendentes.delete(idPendente);
+        }
+      });
     } else {
       console.error(err);
       $('status').textContent = 'Erro: ' + err.type;
@@ -161,6 +211,16 @@ function conectar(idRemoto) {
   if (pares.has(idRemoto)) return;
   const conn = peer.connect(idRemoto, { reliable: true, metadata: { slot: meuSlot } });
   registrarConexao(conn, true);
+
+  // Se a vaga existe mas a conexão não abre, provavelmente a rede está bloqueando
+  const timer = setTimeout(() => {
+    pendentes.delete(idRemoto);
+    if (!pares.has(idRemoto)) {
+      sistema('Há alguém na sala, mas não consegui me conectar. A rede (celular, faculdade, empresa) ' +
+        'pode estar bloqueando a conexão direta. Veja a seção sobre TURN no README.');
+    }
+  }, 15000);
+  pendentes.set(idRemoto, timer);
 }
 
 /* ------------------------ Conexão de dados (chat) ------------------------ */
@@ -177,6 +237,10 @@ function registrarConexao(conn, souIniciador) {
   const id = conn.peer;
 
   conn.on('open', () => {
+    if (pendentes.has(id)) {
+      clearTimeout(pendentes.get(id));
+      pendentes.delete(id);
+    }
     let par = pares.get(id);
 
     if (par && par.conn !== conn && par.conn.open) {
@@ -189,7 +253,7 @@ function registrarConexao(conn, souIniciador) {
         return;
       }
     } else if (!par) {
-      par = { id, nome: 'Alguém', conn, saida: {}, anunciado: false };
+      par = { id, nome: 'Alguém', emoji: '🙂', cor: corDoId(id), conn, saida: {}, anunciado: false };
       pares.set(id, par);
       // Se já estou na voz ou transmitindo tela, inclui a nova pessoa
       if (micStream) chamar(par, 'voice');
@@ -198,7 +262,7 @@ function registrarConexao(conn, souIniciador) {
       par.conn = conn;
     }
 
-    conn.send({ t: 'hello', nome: meuNome });
+    conn.send({ t: 'hello', nome: meuNome, emoji: meuEmoji });
     atualizarPessoas();
   });
 
@@ -240,6 +304,7 @@ function receberDados(conn, d) {
   switch (d.t) {
     case 'hello':
       par.nome = d.nome || 'Anônimo';
+      par.emoji = d.emoji || '🙂';
       if (!par.anunciado) {
         par.anunciado = true;
         sistema(par.nome + ' entrou na sala.');
@@ -247,7 +312,7 @@ function receberDados(conn, d) {
       atualizarPessoas();
       break;
     case 'msg':
-      adicionarMensagem(par.nome, d.texto, false);
+      adicionarMensagem(par.nome, d.texto, false, par.cor, par.emoji);
       break;
     case 'voz-parou':
       removerMidia(par.id, 'voice');
@@ -273,7 +338,7 @@ $('form').addEventListener('submit', (e) => {
   e.preventDefault();
   const texto = $('texto').value.trim();
   if (!texto) return;
-  adicionarMensagem(meuNome, texto, true);
+  adicionarMensagem(meuNome, texto, true, corDoSlot(meuSlot), meuEmoji);
   transmitir({ t: 'msg', texto });
   $('texto').value = '';
 });

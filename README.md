@@ -2,7 +2,7 @@
 
 Uma sala de conversa minimalista que roda inteira no navegador: **chat, canal de voz, compartilhamento de tela e envio de arquivos grandes**, sem cadastro, sem servidor próprio e sem guardar nada.
 
-🔗 **Acesse:** https://GuChape.github.io/Sala-Simples/
+🔗 **Acesse:** https://guchape.github.io/Sala-Simples-/
 
 ## Funcionalidades
 

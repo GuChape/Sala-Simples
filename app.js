@@ -50,6 +50,7 @@ let meuNome = '';
 let micStream = null;
 let telaStream = null;
 let meuEmoji = '🙂';
+let usuarioEstaNoVoiceChat = false; // VARIÁVEL ADICIONADA: Controla se o usuário atual está ouvindo o voice chat
 
 // conexões que tentei abrir e ainda não responderam: id -> timer de aviso
 const pendentes = new Map();
@@ -479,6 +480,10 @@ function mostrarMidia(idPar, tipo, stream) {
       $('audios').appendChild(audio);
     }
     audio.srcObject = stream;
+    
+    // MÁGICA AQUI: Inicia mutado se o usuário atual não estiver no voice chat
+    audio.muted = !usuarioEstaNoVoiceChat; 
+    
     audio.play().catch(() => {});
     return;
   }
@@ -514,28 +519,51 @@ function removerMidia(idPar, tipo) {
 async function entrarNaVoz() {
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      audio: { 
+        echoCancellation: false, // Evita o cancelamento/corte do som da sala quando você fala
+        autoGainControl: false,  // Evita que o navegador abaixe seu microfone sozinho
+        noiseSuppression: true,  // Suprime ruídos de fundo
+        sampleRate: 48000,       // Qualidade de estúdio (48kHz)
+        channelCount: 2
+      }
     });
   } catch (e) {
     sistema('Não foi possível acessar o microfone (permissão negada ou sem dispositivo).');
     return;
   }
+  
+  usuarioEstaNoVoiceChat = true;
+
+  // Desmuta todo mundo que já estava falando na sala
+  document.querySelectorAll('#audios audio').forEach(audio => {
+    audio.muted = false;
+  });
+
   pares.forEach((par) => chamar(par, 'voice'));
-  $('btn-voz').textContent = '📴 Sair da voz';
+  
+  $('btn-voz').textContent = '📴 Sair do Voice chat';
   $('btn-voz').classList.add('ativo');
   $('btn-mudo').disabled = false;
-  sistema('Você entrou na voz.');
+  sistema('Você entrou no Voice chat.');
 }
 
 function sairDaVoz() {
   if (micStream) micStream.getTracks().forEach((t) => t.stop());
   micStream = null;
+  usuarioEstaNoVoiceChat = false;
+
+  // Muta novamente as pessoas da sala para você parar de ouvi-las
+  document.querySelectorAll('#audios audio').forEach(audio => {
+    audio.muted = true;
+  });
+
   pares.forEach((par) => {
     if (par.saida.voice) par.saida.voice.close();
     par.saida.voice = null;
   });
   transmitir({ t: 'voz-parou' });
-  $('btn-voz').textContent = '🎤 Entrar na voz';
+  
+  $('btn-voz').textContent = '🎤 Entrar no Voice chat';
   $('btn-voz').classList.remove('ativo');
   $('btn-mudo').disabled = true;
   $('btn-mudo').textContent = 'Silenciar';
@@ -554,7 +582,15 @@ $('btn-mudo').addEventListener('click', () => {
 
 async function compartilharTela() {
   try {
-    telaStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    telaStream = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        width: { ideal: 1920, max: 2560 },
+        height: { ideal: 1080, max: 1440 },
+        frameRate: { ideal: 60, max: 60 },
+        displaySurface: 'monitor'
+      },
+      audio: true
+    });
   } catch (e) {
     sistema('Compartilhamento de tela cancelado ou não permitido.');
     return;

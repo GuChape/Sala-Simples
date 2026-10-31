@@ -9,8 +9,8 @@ Uma sala de conversa minimalista que roda inteira no navegador: **chat, canal de
 - **Cor e emoji para cada pessoa:** ao entrar, você recebe uma cor e um emoji aleatórios que aparecem ao lado do seu nome no chat. Em uma mesma sala, duas pessoas nunca ficam com a mesma cor.
 - **Salas por código:** basta compartilhar o link (`...#codigo-da-sala`) para outras pessoas entrarem.
 - **Chat em tempo real:** as mensagens existem só enquanto a aba está aberta. Nada é gravado.
-- **Canal de voz:** entrar, sair e silenciar o microfone.
-- **Compartilhamento de tela:** transmita uma tela, janela ou aba para quem está na sala.
+- **Voice chat opcional:** ao entrar na sala você não ouve ninguém. Só quem clica em **Entrar no Voice chat** fala e ouve; dá para silenciar o microfone e sair quando quiser. O 🎙️ aparece ao lado de quem está no Voice chat. O áudio usa Opus em alta qualidade, com supressão de ruído.
+- **Compartilhamento de tela:** transmita uma tela, janela ou aba para quem está na sala, com som, em três níveis de qualidade (1080p 60 fps, 720p 60 fps ou 1080p 30 fps).
 - **Envio de arquivos grandes:** o arquivo vai direto de um navegador para o outro, em pedaços, com barra de progresso.
 - **Sem conta e sem instalação:** funciona em navegadores modernos (Chrome, Edge, Firefox) no computador.
 
@@ -18,7 +18,7 @@ Uma sala de conversa minimalista que roda inteira no navegador: **chat, canal de
 
 1. Abra a página, escreva seu nome e um código de sala (ou gere um aleatório).
 2. Clique em **Copiar link da sala** e envie para quem vai participar.
-3. Use o chat, o botão de voz, o de tela e o 📎 para enviar arquivos.
+3. Use o chat, o Voice chat, o botão de tela e o 📎 para enviar arquivos.
 
 ## Como funciona
 
@@ -45,6 +45,13 @@ O arquivo é cortado em pedaços de 64 KB e enviado pelo canal de dados do WebRT
 - **Arquivos:** quem envia precisa manter a aba aberta até o fim. Quem recebe guarda o arquivo na memória antes de baixar, então arquivos de vários GB podem travar computadores com pouca RAM.
 - **Redes restritivas:** em algumas redes (empresas, faculdades, certos 4G) a conexão direta pode falhar. A solução é configurar um servidor TURN na lista `iceServers` do `app.js`.
 - **Dependência externa:** o servidor gratuito do PeerJS pode ficar instável ou indisponível ocasionalmente.
+
+## Dicas
+
+- **Fones de ouvido:** marque "Estou de fones" para desligar o cancelamento de eco; a voz fica mais natural. Sem fones, deixe desmarcado: com o eco desligado, o som que sai das caixas de som entra no microfone e os outros ouvem.
+- **Som na transmissão de tela:** ao compartilhar, escolha "Tela inteira" e deixe ativo "Compartilhar áudio do sistema" (Windows), ou escolha uma "Guia" e ative "Compartilhar áudio da guia". Janelas e o Firefox não enviam som, e no Mac só o som de uma guia do Chrome/Edge funciona. A legenda do vídeo mostra 🔊 (com som) ou 🔇 (sem som). Se você compartilha o som do sistema sem fones, quem assiste também ouve a voz dos outros que sai das suas caixas.
+- **Qualidade da tela:** escolha antes de compartilhar. "1080p 30 fps" é melhor para texto e slides; "720p 60 fps" é mais leve se a internet de quem transmite for lenta.
+- **Windows diminuindo outros sons enquanto você fala:** é uma configuração do sistema. Vá em *Painel de Controle → Som → aba Comunicações* e marque "Não fazer nada".
 
 ## Estrutura do projeto
 

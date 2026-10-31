@@ -96,7 +96,18 @@ header .muted { margin-left: 10px; }
 #videos video { width: 100%; display: block; max-height: 70vh; background: #000; }
 #videos figcaption { padding: 6px 10px; background: var(--painel); font-size: 0.85rem; }
 #vazio { text-align: center; padding: 40px 0; }
-#controles { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
+#controles { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: auto; }
+#controles select {
+  background: var(--borda);
+  color: var(--texto);
+  border: 0;
+  border-radius: 6px;
+  padding: 9px 10px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+#controles select:disabled { opacity: 0.5; cursor: not-allowed; }
+.opcao { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--muted); cursor: pointer; }
 
 /* Chat */
 #chat {

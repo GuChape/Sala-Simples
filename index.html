@@ -42,7 +42,15 @@
         <div id="controles">
           <button id="btn-voz">🎤 Entrar no Voice chat</button>
           <button id="btn-mudo" class="sec" disabled>Silenciar</button>
+          <label class="opcao" title="Marque se estiver de fones: desliga o cancelamento de eco, a voz fica mais natural e pode evitar que os outros sons baixem enquanto você fala. Sem fones, deixe desmarcado, senão o som do computador vaza para o microfone.">
+            <input type="checkbox" id="chk-fones"> Estou de fones
+          </label>
           <button id="btn-tela">🖥️ Compartilhar tela</button>
+          <select id="sel-qualidade" title="Qualidade da transmissão de tela (escolha antes de compartilhar)">
+            <option value="equilibrada" selected>Tela: 1080p 60 fps</option>
+            <option value="fluida">Tela: 720p 60 fps (mais leve)</option>
+            <option value="nitida">Tela: 1080p 30 fps (melhor p/ texto)</option>
+          </select>
         </div>
         <div id="audios"></div>
       </section>

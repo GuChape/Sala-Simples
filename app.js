@@ -41,6 +41,23 @@ const PALETA = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#38bdf8', '#c084fc'
 const EMOJIS = ['🐶', '🐱', '🦊', '🐼', '🐸', '🐵', '🦁', '🐯', '🐨', '🐙',
   '🦄', '🐢', '🦉', '🐧', '🦋', '🐳', '🦖', '🐝', '🦔', '🐰'];
 
+// ---- Qualidade do áudio (codec Opus) ----
+// Por padrão o navegador codifica a voz a ~32 kbps. Aqui pedimos mais bitrate,
+// correção de erros (FEC) e que o som não seja cortado nos silêncios (DTX).
+const OPUS = {
+  voice:  { stereo: false, bitrate: 64000 },   // voz: mono, 64 kbps
+  screen: { stereo: true,  bitrate: 128000 }   // som da transmissão: estéreo, 128 kbps
+};
+
+// ---- Qualidade da transmissão de tela ----
+// largura/altura máximas, quadros por segundo, bitrate máximo (bits/s),
+// dica de conteúdo e o que sacrificar se a internet apertar.
+const QUALIDADES_TELA = {
+  fluida:      { largura: 1280, altura: 720,  fps: 60, bitrate: 4000000, dica: 'motion', prioridade: 'maintain-framerate' },
+  equilibrada: { largura: 1920, altura: 1080, fps: 60, bitrate: 8000000, dica: 'motion', prioridade: 'balanced' },
+  nitida:      { largura: 1920, altura: 1080, fps: 30, bitrate: 6000000, dica: 'detail', prioridade: 'maintain-resolution' }
+};
+
 const $ = (id) => document.getElementById(id);
 
 let peer = null;        // meu Peer
@@ -50,13 +67,17 @@ let meuNome = '';
 let micStream = null;
 let telaStream = null;
 let meuEmoji = '🙂';
-let usuarioEstaNoVoiceChat = false; // VARIÁVEL ADICIONADA: Controla se o usuário atual está ouvindo o voice chat
+let qualidadeTela = 'equilibrada';
 
 // conexões que tentei abrir e ainda não responderam: id -> timer de aviso
 const pendentes = new Map();
 
-// id do outro peer -> { id, nome, conn, saida: {voice, screen}, anunciado }
+// id do outro peer -> { id, nome, emoji, cor, conn, saida: {voice, screen}, naVoz, anunciado }
+// saida = chamadas de mídia que EU enviei para essa pessoa
+// naVoz = essa pessoa está no Voice chat?
 const pares = new Map();
+// chamadas de mídia que estou RECEBENDO: "peerId-voice" / "peerId-screen" -> chamada
+const entradas = new Map();
 // arquivos sendo recebidos: "peerId:idArquivo" -> {...}
 const recebendo = new Map();
 
@@ -119,12 +140,13 @@ function adicionarMensagem(autor, texto, propria, cor, emoji) {
 function atualizarPessoas() {
   const el = $('pessoas');
   el.textContent = '';
-  const lista = [{ nome: meuNome + ' (você)', emoji: meuEmoji, cor: corDoSlot(meuSlot) }];
+  const lista = [{ nome: meuNome + ' (você)', emoji: meuEmoji, cor: corDoSlot(meuSlot), naVoz: !!micStream }];
   pares.forEach((p) => lista.push(p));
   lista.forEach((p, i) => {
     if (i) el.append(', ');
     const s = document.createElement('span');
-    s.textContent = p.emoji + ' ' + p.nome;
+    // 🎙️ ao lado de quem está no Voice chat
+    s.textContent = p.emoji + ' ' + p.nome + (p.naVoz ? ' 🎙️' : '');
     s.style.color = p.cor;
     el.appendChild(s);
   });
@@ -254,16 +276,16 @@ function registrarConexao(conn, souIniciador) {
         return;
       }
     } else if (!par) {
-      par = { id, nome: 'Alguém', emoji: '🙂', cor: corDoId(id), conn, saida: {}, anunciado: false };
+      par = { id, nome: 'Alguém', emoji: '🙂', cor: corDoId(id), conn, saida: {}, naVoz: false, anunciado: false };
       pares.set(id, par);
-      // Se já estou na voz ou transmitindo tela, inclui a nova pessoa
-      if (micStream) chamar(par, 'voice');
+      // Se estou transmitindo a tela, a nova pessoa recebe também.
+      // O Voice chat é diferente: só chamo quem avisar que está nele.
       if (telaStream) chamar(par, 'screen');
     } else {
       par.conn = conn;
     }
 
-    conn.send({ t: 'hello', nome: meuNome, emoji: meuEmoji });
+    conn.send({ t: 'hello', nome: meuNome, emoji: meuEmoji, voz: !!micStream });
     atualizarPessoas();
   });
 
@@ -281,8 +303,8 @@ function removerPar(id) {
   const par = pares.get(id);
   if (!par) return;
   Object.values(par.saida).forEach((c) => c && c.close());
-  removerMidia(id, 'voice');
-  removerMidia(id, 'screen');
+  fecharChamadaDeEntrada(id, 'voice');
+  fecharChamadaDeEntrada(id, 'screen');
 
   // Transferências em andamento desse par falharam
   recebendo.forEach((r, chave) => {
@@ -306,6 +328,8 @@ function receberDados(conn, d) {
     case 'hello':
       par.nome = d.nome || 'Anônimo';
       par.emoji = d.emoji || '🙂';
+      par.naVoz = !!d.voz;
+      if (par.naVoz && micStream) chamar(par, 'voice'); // já estamos os dois no Voice chat
       if (!par.anunciado) {
         par.anunciado = true;
         sistema(par.nome + ' entrou na sala.');
@@ -315,11 +339,23 @@ function receberDados(conn, d) {
     case 'msg':
       adicionarMensagem(par.nome, d.texto, false, par.cor, par.emoji);
       break;
+    case 'voz-entrou':
+      par.naVoz = true;
+      // Se eu também estou no Voice chat, mando minha voz para quem acabou de entrar
+      if (micStream) {
+        fecharChamadaDeSaida(par, 'voice'); // garante uma chamada nova
+        chamar(par, 'voice');
+      }
+      atualizarPessoas();
+      break;
     case 'voz-parou':
-      removerMidia(par.id, 'voice');
+      par.naVoz = false;
+      fecharChamadaDeSaida(par, 'voice');   // essa pessoa não está mais ouvindo
+      fecharChamadaDeEntrada(par.id, 'voice');
+      atualizarPessoas();
       break;
     case 'tela-parou':
-      removerMidia(par.id, 'screen');
+      fecharChamadaDeEntrada(par.id, 'screen');
       break;
     case 'arq-ini':
       iniciarRecepcao(par, d);
@@ -449,20 +485,129 @@ function finalizarRecepcao(par, d) {
 
 /* --------------------------- Voz e tela (mídia) --------------------------- */
 
+// Reescreve a linha "a=fmtp" do Opus no SDP com os parâmetros de qualidade.
+// Quem manda o áudio usa o que o RECEPTOR pede, por isso aplicamos tanto ao
+// iniciar a chamada quanto ao atendê-la.
+function ajustarOpus(sdp, { stereo, bitrate }) {
+  const rtpmap = sdp.match(/a=rtpmap:(\d+) opus\/48000\/2/i);
+  if (!rtpmap) return sdp;
+  const pt = rtpmap[1];
+  const novos = {
+    minptime: '10',
+    useinbandfec: '1',   // correção de erros: aguenta perda de pacotes
+    usedtx: '0',         // não corta o som nos momentos de silêncio
+    cbr: '0',
+    stereo: stereo ? '1' : '0',
+    'sprop-stereo': stereo ? '1' : '0',
+    maxaveragebitrate: String(bitrate),
+    maxplaybackrate: '48000'
+  };
+  const montar = (atuais) => {
+    const mapa = {};
+    atuais.split(';').forEach((kv) => {
+      const [k, v] = kv.trim().split('=');
+      if (k) mapa[k] = v;
+    });
+    Object.assign(mapa, novos);
+    return Object.keys(mapa).map((k) => k + '=' + mapa[k]).join(';');
+  };
+  const linhaFmtp = new RegExp('a=fmtp:' + pt + ' ([^\\r\\n]*)');
+  if (linhaFmtp.test(sdp)) {
+    return sdp.replace(linhaFmtp, (_, atuais) => 'a=fmtp:' + pt + ' ' + montar(atuais));
+  }
+  // Não havia linha fmtp: cria uma logo depois do rtpmap
+  const linhaRtpmap = new RegExp('(a=rtpmap:' + pt + ' [^\\r\\n]*)');
+  return sdp.replace(linhaRtpmap, (_, linha) => linha + '\r\na=fmtp:' + pt + ' ' + montar(''));
+}
+
+// Ajusta bitrate, fps e prioridade do vídeo enviado. O navegador só aceita
+// isso depois que a negociação avança, então tentamos por alguns segundos.
+async function aplicarQualidadeVideo(call, q) {
+  for (let i = 0; i < 30; i++) {
+    try {
+      const pc = call.peerConnection;
+      const sender = pc && pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+      if (sender) {
+        const params = sender.getParameters();
+        if (params.encodings && params.encodings.length) {
+          params.encodings[0].maxBitrate = q.bitrate;
+          params.encodings[0].maxFramerate = q.fps;
+          params.encodings[0].scaleResolutionDownBy = 1;
+          params.degradationPreference = q.prioridade;
+          await sender.setParameters(params);
+          return;
+        }
+      }
+    } catch (e) { /* ainda negociando: tenta de novo */ }
+    await esperar(500);
+  }
+}
+
+function fecharChamadaDeSaida(par, tipo) {
+  const call = par.saida[tipo];
+  par.saida[tipo] = null;
+  if (call) call.close();
+}
+
+function fecharChamadaDeEntrada(id, tipo) {
+  const chave = id + '-' + tipo;
+  const call = entradas.get(chave);
+  entradas.delete(chave);
+  if (call) call.close();
+  removerMidia(id, tipo);
+}
+
 // Chamada de saída: eu mando minha voz ou minha tela para um par.
 function chamar(par, tipo) {
   const stream = tipo === 'voice' ? micStream : telaStream;
-  if (!stream || !peer) return;
-  const call = peer.call(par.id, stream, { metadata: { tipo } });
+  if (!stream || !peer || par.saida[tipo]) return;
+
+  const call = peer.call(par.id, stream, {
+    metadata: { tipo },
+    sdpTransform: (sdp) => ajustarOpus(sdp, OPUS[tipo])
+  });
   par.saida[tipo] = call;
+
+  const limpar = () => { if (par.saida[tipo] === call) par.saida[tipo] = null; };
+  call.on('close', limpar);
+  call.on('error', limpar);
+
+  if (tipo === 'screen') {
+    const q = QUALIDADES_TELA[qualidadeTela];
+    aplicarQualidadeVideo(call, q);
+    // Reaplica quando a conexão fecha de fato, caso o navegador tenha zerado
+    const pc = call.peerConnection;
+    if (pc) {
+      pc.addEventListener('connectionstatechange', () => {
+        if (pc.connectionState === 'connected') aplicarQualidadeVideo(call, q);
+      });
+    }
+  }
 }
 
 // Chamada de entrada: apenas recebo (não mando nada de volta nessa chamada).
 function receberChamada(call) {
   const tipo = (call.metadata && call.metadata.tipo) || 'voice';
-  call.answer();
+  const chave = call.peer + '-' + tipo;
+
+  // Fora do Voice chat eu não ouço ninguém: recuso chamadas de voz.
+  if (tipo === 'voice' && !micStream) {
+    call.close();
+    return;
+  }
+
+  const antiga = entradas.get(chave);
+  if (antiga && antiga !== call) antiga.close();
+  entradas.set(chave, call);
+
+  call.answer(undefined, { sdpTransform: (sdp) => ajustarOpus(sdp, OPUS[tipo]) });
   call.on('stream', (stream) => mostrarMidia(call.peer, tipo, stream));
-  call.on('close', () => removerMidia(call.peer, tipo));
+  call.on('close', () => {
+    if (entradas.get(chave) === call) {
+      entradas.delete(chave);
+      removerMidia(call.peer, tipo);
+    }
+  });
   call.on('error', (e) => console.error('Erro na chamada', e));
 }
 
@@ -472,6 +617,7 @@ function mostrarMidia(idPar, tipo, stream) {
   const nome = par ? par.nome : 'Alguém';
 
   if (tipo === 'voice') {
+    if (!micStream) return; // fora do Voice chat: não toca a voz de ninguém
     let audio = document.querySelector('audio[data-chave="' + chave + '"]');
     if (!audio) {
       audio = document.createElement('audio');
@@ -480,10 +626,6 @@ function mostrarMidia(idPar, tipo, stream) {
       $('audios').appendChild(audio);
     }
     audio.srcObject = stream;
-    
-    // MÁGICA AQUI: Inicia mutado se o usuário atual não estiver no voice chat
-    audio.muted = !usuarioEstaNoVoiceChat; 
-    
     audio.play().catch(() => {});
     return;
   }
@@ -504,7 +646,16 @@ function mostrarMidia(idPar, tipo, stream) {
   }
   const v = fig.querySelector('video');
   v.srcObject = stream;
-  v.play().catch(() => {});
+  v.muted = false;
+  v.play().catch(() => {
+    // Se o navegador bloquear o som, toca sem som e avisa
+    v.muted = true;
+    v.play().catch(() => {});
+    sistema('O navegador bloqueou o som da transmissão. Clique no vídeo e ative o som.');
+  });
+  // Mostra se esta transmissão traz som
+  const temSom = stream.getAudioTracks().length > 0;
+  fig.querySelector('figcaption').textContent = 'Tela de ' + nome + (temSom ? ' 🔊' : ' 🔇 sem som');
   atualizarPalcoVazio();
 }
 
@@ -516,60 +667,68 @@ function removerMidia(idPar, tipo) {
 
 /* ---- Voz ---- */
 
-async function entrarNaVoz() {
+// Restrições do microfone. Com fones de ouvido o cancelamento de eco é
+// desnecessário e deixa a voz com som mais "processado", então dá para desligar.
+function restricoesMic() {
+  return {
+    echoCancellation: !$('chk-fones').checked,
+    noiseSuppression: true,
+    autoGainControl: true,
+    channelCount: 1,
+    sampleRate: 48000
+  };
+}
+
+async function entrarNoVoiceChat() {
+  if (micStream) return;
+  $('btn-voz').disabled = true;
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { 
-        echoCancellation: false, // Evita o cancelamento/corte do som da sala quando você fala
-        autoGainControl: false,  // Evita que o navegador abaixe seu microfone sozinho
-        noiseSuppression: true,  // Suprime ruídos de fundo
-        sampleRate: 48000,       // Qualidade de estúdio (48kHz)
-        channelCount: 2
-      }
-    });
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: restricoesMic() });
   } catch (e) {
     sistema('Não foi possível acessar o microfone (permissão negada ou sem dispositivo).');
     return;
+  } finally {
+    $('btn-voz').disabled = false;
   }
-  
-  usuarioEstaNoVoiceChat = true;
-
-  // Desmuta todo mundo que já estava falando na sala
-  document.querySelectorAll('#audios audio').forEach(audio => {
-    audio.muted = false;
-  });
-
-  pares.forEach((par) => chamar(par, 'voice'));
-  
+  // Mando minha voz só para quem já está no Voice chat. Quem entrar depois
+  // avisa com "voz-entrou" e recebe a minha chamada nesse momento.
+  pares.forEach((par) => { if (par.naVoz) chamar(par, 'voice'); });
+  transmitir({ t: 'voz-entrou' });
   $('btn-voz').textContent = '📴 Sair do Voice chat';
   $('btn-voz').classList.add('ativo');
   $('btn-mudo').disabled = false;
+  atualizarPessoas();
   sistema('Você entrou no Voice chat.');
 }
 
-function sairDaVoz() {
+function sairDoVoiceChat() {
   if (micStream) micStream.getTracks().forEach((t) => t.stop());
   micStream = null;
-  usuarioEstaNoVoiceChat = false;
-
-  // Muta novamente as pessoas da sala para você parar de ouvi-las
-  document.querySelectorAll('#audios audio').forEach(audio => {
-    audio.muted = true;
-  });
-
-  pares.forEach((par) => {
-    if (par.saida.voice) par.saida.voice.close();
-    par.saida.voice = null;
-  });
+  // Paro de enviar minha voz e de ouvir os outros
+  pares.forEach((par) => fecharChamadaDeSaida(par, 'voice'));
+  [...entradas.keys()]
+    .filter((chave) => chave.endsWith('-voice'))
+    .forEach((chave) => fecharChamadaDeEntrada(chave.slice(0, -'-voice'.length), 'voice'));
   transmitir({ t: 'voz-parou' });
-  
   $('btn-voz').textContent = '🎤 Entrar no Voice chat';
   $('btn-voz').classList.remove('ativo');
   $('btn-mudo').disabled = true;
   $('btn-mudo').textContent = 'Silenciar';
+  atualizarPessoas();
+  sistema('Você saiu do Voice chat.');
 }
 
-$('btn-voz').addEventListener('click', () => (micStream ? sairDaVoz() : entrarNaVoz()));
+$('btn-voz').addEventListener('click', () => (micStream ? sairDoVoiceChat() : entrarNoVoiceChat()));
+
+// "Estou de fones": aplica na hora, sem precisar sair do Voice chat
+$('chk-fones').addEventListener('change', async () => {
+  if (!micStream) return;
+  try {
+    await micStream.getAudioTracks()[0].applyConstraints(restricoesMic());
+  } catch (e) {
+    sistema('Não consegui trocar na hora. Saia e entre de novo no Voice chat para aplicar.');
+  }
+});
 
 $('btn-mudo').addEventListener('click', () => {
   if (!micStream) return;
@@ -581,22 +740,37 @@ $('btn-mudo').addEventListener('click', () => {
 /* ---- Tela ---- */
 
 async function compartilharTela() {
+  qualidadeTela = $('sel-qualidade').value;
+  const q = QUALIDADES_TELA[qualidadeTela];
   try {
     telaStream = await navigator.mediaDevices.getDisplayMedia({
       video: {
-        width: { ideal: 1920, max: 2560 },
-        height: { ideal: 1080, max: 1440 },
-        frameRate: { ideal: 60, max: 60 },
-        displaySurface: 'monitor'
+        width: { ideal: q.largura, max: q.largura },
+        height: { ideal: q.altura, max: q.altura },
+        frameRate: { ideal: q.fps, max: q.fps }
       },
-      audio: true
+      // Som da transmissão sem processamento de voz (senão música e jogos ficam abafados)
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      selfBrowserSurface: 'exclude', // não oferece esta própria aba para compartilhar
+      systemAudio: 'include'         // já deixa marcada a opção de compartilhar o som
     });
   } catch (e) {
     sistema('Compartilhamento de tela cancelado ou não permitido.');
     return;
   }
   // Se a pessoa parar pelo botão do próprio navegador
-  telaStream.getVideoTracks()[0].addEventListener('ended', pararTela);
+  const faixaVideo = telaStream.getVideoTracks()[0];
+  faixaVideo.addEventListener('ended', pararTela);
+  // Dica para o codec: "motion" prioriza fluidez, "detail" prioriza nitidez (texto)
+  if ('contentHint' in faixaVideo) faixaVideo.contentHint = q.dica;
+
+  // O navegador só envia som se a pessoa marcar a opção no seletor de tela.
+  const temSom = telaStream.getAudioTracks().length > 0;
+  if (!temSom) {
+    sistema('⚠️ Sua transmissão está SEM SOM. Para incluir o som, ao compartilhar escolha "Tela inteira" ' +
+      'e ative "Compartilhar áudio do sistema" (Windows), ou escolha uma "Guia" e ative "Compartilhar áudio ' +
+      'da guia". Janelas e o Firefox não enviam som; no Mac só funciona o som de uma guia do Chrome/Edge.');
+  }
 
   pares.forEach((par) => chamar(par, 'screen'));
 
@@ -609,13 +783,14 @@ async function compartilharTela() {
   video.playsInline = true;
   video.srcObject = telaStream;
   const legenda = document.createElement('figcaption');
-  legenda.textContent = 'Sua tela (prévia)';
+  legenda.textContent = 'Sua tela (prévia)' + (temSom ? ' 🔊 com som' : ' 🔇 sem som');
   fig.append(video, legenda);
   $('videos').appendChild(fig);
   atualizarPalcoVazio();
 
   $('btn-tela').textContent = '⏹️ Parar de compartilhar';
   $('btn-tela').classList.add('ativo');
+  $('sel-qualidade').disabled = true; // a qualidade vale a partir do início da transmissão
 }
 
 function pararTela() {
@@ -630,6 +805,7 @@ function pararTela() {
   removerMidia('eu', 'screen');
   $('btn-tela').textContent = '🖥️ Compartilhar tela';
   $('btn-tela').classList.remove('ativo');
+  $('sel-qualidade').disabled = false;
 }
 
 $('btn-tela').addEventListener('click', () => (telaStream ? pararTela() : compartilharTela()));

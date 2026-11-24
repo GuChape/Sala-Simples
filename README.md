@@ -2,7 +2,7 @@
 
 Uma sala de conversa minimalista que roda inteira no navegador: **chat, canal de voz, compartilhamento de tela e envio de arquivos grandes**, sem cadastro, sem servidor próprio e sem guardar nada.
 
-🔗 **Acesse:** https://guchape.github.io/Sala-Simples/
+🔗 **Acesse:** https://guchape.github.io/Sala-Simples-/
 
 ## Funcionalidades
 
@@ -12,6 +12,7 @@ Uma sala de conversa minimalista que roda inteira no navegador: **chat, canal de
 - **Voice chat opcional:** ao entrar na sala você não ouve ninguém. Só quem clica em **Entrar no Voice chat** fala e ouve; dá para silenciar o microfone e sair quando quiser. O 🎙️ aparece ao lado de quem está no Voice chat. O áudio usa Opus em alta qualidade, com supressão de ruído.
 - **Compartilhamento de tela:** transmita uma tela, janela ou aba para quem está na sala, com som, em três níveis de qualidade (1080p 60 fps, 720p 60 fps ou 1080p 30 fps).
 - **Envio de arquivos grandes:** o arquivo vai direto de um navegador para o outro, em pedaços, com barra de progresso.
+- **Imagens, vídeos e áudios no chat:** o que for enviado aparece direto no chat, com o link de download logo abaixo. Clique numa imagem para abri-la em tela cheia e clique de novo para dar zoom (arraste para mover; Esc ou ✕ para fechar). Vídeos e áudios têm play, volume, mudo e tela cheia.
 - **Sem conta e sem instalação:** funciona em navegadores modernos (Chrome, Edge, Firefox) no computador.
 
 ## Como usar
@@ -43,13 +44,24 @@ O arquivo é cortado em pedaços de 64 KB e enviado pelo canal de dados do WebRT
 
 - **Tamanho da sala:** até 6 pessoas. Como todos se conectam a todos, a voz e a tela consomem mais internet de quem transmite conforme a sala cresce. Funciona melhor com 2 a 4 pessoas.
 - **Arquivos:** quem envia precisa manter a aba aberta até o fim. Quem recebe guarda o arquivo na memória antes de baixar, então arquivos de vários GB podem travar computadores com pouca RAM.
-- **Redes restritivas:** em algumas redes (empresas, faculdades, certos 4G) a conexão direta pode falhar. A solução é configurar um servidor TURN na lista `iceServers` do `app.js`.
+- **Redes restritivas:** em algumas redes (empresas, faculdades, certos 4G) a conexão direta pode falhar. A solução é configurar um servidor TURN (veja a seção abaixo).
 - **Dependência externa:** o servidor gratuito do PeerJS pode ficar instável ou indisponível ocasionalmente.
+
+## Conectar pelo celular ou entre redes diferentes (TURN)
+
+Quando duas pessoas estão em redes diferentes (por exemplo, o celular em 4G/5G e o computador no Wi-Fi), a conexão direta costuma ser bloqueada pelas operadoras e roteadores. Nesse caso cada um entra na sala e não enxerga o outro, como se fossem salas diferentes. O que resolve é um servidor **TURN**, que repassa o tráfego quando o caminho direto não existe. O [Metered Open Relay](https://metered.ca/tools/openrelay/) oferece 20 GB por mês de graça.
+
+1. Crie uma conta grátis em https://dashboard.metered.ca/signup?tool=turnserver
+2. No painel, anote o **nome do seu app** (o endereço fica `nome.metered.live`) e a **API Key**.
+3. No `app.js`, preencha `TURN_APP` com o nome do app e `TURN_API_KEY` com a chave. Envie para o GitHub e atualize o site (Ctrl+F5).
+4. Confira: no topo da sala deve aparecer **Conectado · TURN ativo**. Se aparecer "sem TURN", os campos estão vazios ou incorretos.
+
+A chave fica visível no código público do site. Para uso entre amigos isso é aceitável, mas qualquer pessoa poderia gastar a sua cota gratuita; se isso acontecer, gere uma chave nova no painel.
 
 ## Dicas
 
 - **Fones de ouvido:** marque "Estou de fones" para desligar o cancelamento de eco; a voz fica mais natural. Sem fones, deixe desmarcado: com o eco desligado, o som que sai das caixas de som entra no microfone e os outros ouvem.
-- **Som na transmissão de tela:** ao compartilhar, escolha "Tela inteira" e deixe ativo "Compartilhar áudio do sistema" (Windows), ou escolha uma "Guia" e ative "Compartilhar áudio da guia". Janelas e o Firefox não enviam som, e no Mac só o som de uma guia do Chrome/Edge funciona. A legenda do vídeo mostra 🔊 (com som) ou 🔇 (sem som). Se você compartilha o som do sistema sem fones, quem assiste também ouve a voz dos outros que sai das suas caixas.
+- **Som na transmissão de tela:** ao compartilhar, escolha "Tela inteira" e deixe ativo "Compartilhar áudio do sistema" (Windows), ou escolha uma "Guia" e ative "Compartilhar áudio da guia". Janelas e o Firefox não enviam som, e no Mac só o som de uma guia do Chrome/Edge funciona. A legenda do vídeo mostra 🔊 (com som) ou 🔇 (sem som). No Chrome/Edge 140 ou mais novo (Windows e Mac), o som que a própria página toca, como a voz do Voice chat e os vídeos do chat, fica de fora da transmissão, então ninguém ouve a própria voz de volta. Em outros navegadores ou versões mais antigas isso não é garantido; nesse caso compartilhe uma guia em vez da tela inteira.
 - **Qualidade da tela:** escolha antes de compartilhar. "1080p 30 fps" é melhor para texto e slides; "720p 60 fps" é mais leve se a internet de quem transmite for lenta.
 - **Windows diminuindo outros sons enquanto você fala:** é uma configuração do sistema. Vá em *Painel de Controle → Som → aba Comunicações* e marque "Não fazer nada".
 

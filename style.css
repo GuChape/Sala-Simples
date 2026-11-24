@@ -126,6 +126,37 @@ header .muted { margin-left: 10px; }
 .msg.arquivo progress { width: 100%; }
 .msg.arquivo a { color: #8ea1ff; }
 
+/* Pré-visualização de mídia no chat */
+.preview { display: flex; }
+.preview img, .preview video { max-width: 100%; max-height: 260px; border-radius: 6px; background: #000; }
+.preview img { cursor: zoom-in; object-fit: contain; }
+.preview video, .preview audio { width: 100%; }
+.preview.erro { color: var(--muted); font-size: 0.8rem; }
+
+/* Imagem em tela cheia */
+.lightbox { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, 0.88); display: flex; overflow: auto; }
+.lightbox img {
+  flex: none;              /* não deixa o flexbox encolher a imagem ampliada */
+  margin: auto;            /* centraliza sem cortar quando a imagem ampliada passa da tela */
+  max-width: 92vw;
+  max-height: 88vh;
+  object-fit: contain;
+  cursor: zoom-in;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.lightbox img.ampliada { cursor: zoom-out; }
+.lightbox-fechar {
+  position: fixed; top: 14px; right: 18px;
+  width: 38px; height: 38px; padding: 0;
+  border-radius: 50%; background: rgba(255, 255, 255, 0.15); font-size: 1.1rem;
+}
+.lightbox-fechar:hover:not(:disabled) { background: rgba(255, 255, 255, 0.3); }
+.lightbox-legenda {
+  position: fixed; bottom: 12px; left: 0; right: 0; text-align: center;
+  color: #ddd; font-size: 0.85rem; pointer-events: none; text-shadow: 0 1px 3px #000;
+}
+
 #form { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--borda); }
 #form input[type="text"], #form input:not([type]) { flex: 1; }
 .anexo { display: grid; place-items: center; width: 40px; background: var(--borda); border-radius: 6px; cursor: pointer; }

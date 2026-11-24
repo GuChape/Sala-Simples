@@ -20,17 +20,47 @@ const PREFIXO = 'salasimples-v1-';   // evita colisão com outros apps no servid
 const TAMANHO_PEDACO = 64 * 1024;    // tamanho de cada pedaço de arquivo
 const BUFFER_MAX = 4 * 1024 * 1024;  // pausa o envio se o buffer passar disso
 
-// Servidores STUN/TURN. Se algumas conexões falharem (redes restritivas),
-// adicione um servidor TURN aqui. Veja o README.
+// Servidores STUN. Eles ajudam a descobrir o endereço de cada pessoa, mas NÃO
+// resolvem redes que bloqueiam a conexão direta (celular em 4G/5G, alguns
+// Wi-Fi, faculdade, empresa). Para esses casos é preciso um servidor TURN.
 const CONFIG_PEER = {
   config: {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' }
-      // { urls: 'turn:SEU_SERVIDOR:3478', username: 'usuario', credential: 'senha' }
     ]
   }
 };
+
+// ---- TURN gratuito (Metered Open Relay, 20 GB/mês) ----
+// 1. Crie uma conta em https://dashboard.metered.ca/signup?tool=turnserver
+// 2. Preencha os dois campos abaixo (o README explica onde achar cada um).
+// Deixe vazio para usar só a conexão direta.
+const TURN_APP = '';      // nome do seu app, o "nome" de nome.metered.live
+const TURN_API_KEY = '';  // sua API Key do Metered
+let temTurn = false;
+
+async function carregarServidoresIce() {
+  if (!TURN_APP || !TURN_API_KEY) return;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const resp = await fetch(
+      'https://' + TURN_APP + '.metered.live/api/v1/turn/credentials?apiKey=' + encodeURIComponent(TURN_API_KEY),
+      { signal: ctrl.signal }
+    );
+    clearTimeout(timer);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const lista = await resp.json();
+    if (Array.isArray(lista) && lista.length) {
+      CONFIG_PEER.config.iceServers = CONFIG_PEER.config.iceServers.concat(lista);
+      temTurn = true;
+    }
+  } catch (e) {
+    console.error('TURN indisponível', e);
+    sistema('Não consegui carregar o servidor TURN (confira o nome do app e a API Key no app.js). Usando só a conexão direta.');
+  }
+}
 
 // Uma cor por vaga da sala (6 vagas = 6 cores). Como cada vaga só pode ser
 // ocupada por uma pessoa, ninguém na mesma sala repete cor, e a cor volta a
@@ -164,19 +194,24 @@ function transmitir(mensagem) {
 
 /* --------------------------- Entrar na sala --------------------------- */
 
-function entrar() {
+let entrando = false;
+
+async function entrar() {
+  if (entrando) return;
   meuNome = $('nome').value.trim() || 'Anônimo';
   sala = $('codigo').value.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
   if (!sala) {
     alert('Digite um código de sala (letras, números e hífen).');
     return;
   }
+  entrando = true;
   location.hash = sala;
   $('entrada').hidden = true;
   $('app').hidden = false;
   $('sala-nome').textContent = sala;
   $('status').textContent = 'Conectando...';
   meuEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+  await carregarServidoresIce();
   abrirPeer(ordemAleatoriaDeVagas(), 0);
 }
 
@@ -194,7 +229,7 @@ function abrirPeer(ordem, indice) {
   p.on('open', () => {
     peer = p;
     meuSlot = slot;
-    $('status').textContent = 'Conectado';
+    $('status').textContent = 'Conectado' + (temTurn ? ' · TURN ativo' : ' · sem TURN');
     atualizarPessoas();
     sistema('Você entrou na sala.');
 
@@ -239,8 +274,10 @@ function conectar(idRemoto) {
   const timer = setTimeout(() => {
     pendentes.delete(idRemoto);
     if (!pares.has(idRemoto)) {
-      sistema('Há alguém na sala, mas não consegui me conectar. A rede (celular, faculdade, empresa) ' +
-        'pode estar bloqueando a conexão direta. Veja a seção sobre TURN no README.');
+      sistema('Há alguém na sala, mas não consegui me conectar. ' + (temTurn
+        ? 'Mesmo com o servidor TURN a conexão falhou. Confira o nome do app e a API Key no app.js.'
+        : 'Provavelmente a rede (celular 4G/5G, certos Wi-Fi, faculdade, empresa) impede a conexão direta. ' +
+          'A solução é configurar um servidor TURN (veja o README).'));
     }
   }, 15000);
   pendentes.set(idRemoto, timer);
@@ -382,6 +419,145 @@ $('form').addEventListener('submit', (e) => {
 
 /* ------------------------- Transferência de arquivos ------------------------- */
 
+/* ---- Pré-visualização de imagens, vídeos e áudios no chat ---- */
+
+// Usado quando o tipo do arquivo vem vazio (acontece com alguns formatos).
+const MIME_POR_EXT = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  avif: 'image/avif', bmp: 'image/bmp', svg: 'image/svg+xml',
+  mp4: 'video/mp4', m4v: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg',
+  mov: 'video/quicktime', mkv: 'video/x-matroska',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg',
+  m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac'
+};
+
+function mimeEfetivo(nome, mime) {
+  if (mime && mime !== 'application/octet-stream') return mime.toLowerCase();
+  const ext = (nome.split('.').pop() || '').toLowerCase();
+  return MIME_POR_EXT[ext] || '';
+}
+
+// Cria a pré-visualização (ou devolve null se o arquivo não for imagem, vídeo ou áudio).
+// "fonte" é um File ou Blob.
+function criarPreview(fonte, nome, mime) {
+  const m = mimeEfetivo(nome, mime);
+  const tipo = m.startsWith('image/') ? 'imagem' : m.startsWith('video/') ? 'video' : m.startsWith('audio/') ? 'audio' : null;
+  if (!tipo) return null;
+
+  const blob = fonte.type === m ? fonte : new Blob([fonte], { type: m });
+  const url = URL.createObjectURL(blob);
+  const caixa = document.createElement('div');
+  caixa.className = 'preview';
+
+  const falhou = () => {
+    caixa.className = 'preview erro';
+    caixa.textContent = 'Este navegador não consegue exibir o arquivo aqui. Use o link para baixar.';
+  };
+
+  if (tipo === 'imagem') {
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = nome;
+    img.title = 'Clique para ampliar';
+    img.addEventListener('load', rolarChat);
+    img.addEventListener('error', falhou);
+    img.addEventListener('click', () => abrirLightbox(url, nome));
+    caixa.appendChild(img);
+  } else {
+    // Vídeo e áudio usam os controles do navegador: play, volume, mudo, tela cheia
+    const midia = document.createElement(tipo === 'video' ? 'video' : 'audio');
+    midia.src = url;
+    midia.controls = true;
+    midia.preload = 'metadata';
+    if (tipo === 'video') midia.playsInline = true;
+    midia.addEventListener('loadedmetadata', rolarChat);
+    midia.addEventListener('error', falhou);
+    // Ao dar play em um, pausa os outros
+    midia.addEventListener('play', () => {
+      document.querySelectorAll('.preview video, .preview audio').forEach((o) => { if (o !== midia) o.pause(); });
+    });
+    caixa.appendChild(midia);
+  }
+  return caixa;
+}
+
+// Imagem em tela cheia: clique na imagem para dar zoom (e de novo para voltar),
+// arraste para mover quando ampliada, e feche com ✕, Esc ou clicando fora.
+function abrirLightbox(url, nome) {
+  const fundo = document.createElement('div');
+  fundo.className = 'lightbox';
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = nome;
+  img.draggable = false;
+  const fechar = document.createElement('button');
+  fechar.className = 'lightbox-fechar';
+  fechar.textContent = '✕';
+  fechar.title = 'Fechar (Esc)';
+  const legenda = document.createElement('div');
+  legenda.className = 'lightbox-legenda';
+  legenda.textContent = nome;
+  fundo.append(img, fechar, legenda);
+
+  const aoTeclar = (e) => { if (e.key === 'Escape') fecharTudo(); };
+  function fecharTudo() {
+    document.removeEventListener('keydown', aoTeclar);
+    fundo.remove();
+  }
+  document.addEventListener('keydown', aoTeclar);
+  fechar.addEventListener('click', fecharTudo);
+  fundo.addEventListener('click', (e) => { if (e.target === fundo) fecharTudo(); });
+
+  let ampliada = false;
+  let arrastou = false;   // true se o último gesto foi um arrasto (não conta como clique)
+  let arrasto = null;
+
+  img.addEventListener('click', (e) => {
+    if (arrastou) { arrastou = false; return; }
+    ampliada = !ampliada;
+    if (ampliada) {
+      // Zoom de 2,5x em direção ao ponto clicado
+      const r = img.getBoundingClientRect();
+      const fx = (e.clientX - r.left) / r.width;
+      const fy = (e.clientY - r.top) / r.height;
+      img.style.maxWidth = 'none';
+      img.style.maxHeight = 'none';
+      img.style.width = r.width * 2.5 + 'px';
+      img.style.height = 'auto';
+      img.classList.add('ampliada');
+      fundo.scrollLeft = fx * img.offsetWidth - fundo.clientWidth / 2;
+      fundo.scrollTop = fy * img.offsetHeight - fundo.clientHeight / 2;
+    } else {
+      img.removeAttribute('style');
+      img.classList.remove('ampliada');
+    }
+  });
+
+  // Arrastar para mover a imagem ampliada
+  img.addEventListener('pointerdown', (e) => {
+    arrastou = false;
+    if (!ampliada) return;
+    arrasto = { x: e.clientX, y: e.clientY, sl: fundo.scrollLeft, st: fundo.scrollTop, moveu: false };
+    img.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  img.addEventListener('pointermove', (e) => {
+    if (!arrasto) return;
+    const dx = e.clientX - arrasto.x;
+    const dy = e.clientY - arrasto.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) arrasto.moveu = true;
+    fundo.scrollLeft = arrasto.sl - dx;
+    fundo.scrollTop = arrasto.st - dy;
+  });
+  const soltar = () => {
+    if (arrasto) { arrastou = arrasto.moveu; arrasto = null; }
+  };
+  img.addEventListener('pointerup', soltar);
+  img.addEventListener('pointercancel', soltar);
+
+  document.body.appendChild(fundo);
+}
+
 function criarItemArquivo(texto) {
   const el = document.createElement('div');
   el.className = 'msg arquivo';
@@ -427,6 +603,9 @@ async function enviarArquivo(arquivo) {
 
   const id = Math.random().toString(36).slice(2);
   const ui = criarItemArquivo('Enviando ' + arquivo.name + ' (' + formatarTamanho(arquivo.size) + ')');
+  // Quem envia também vê a imagem/vídeo no chat, logo de início
+  const previaPropria = criarPreview(arquivo, arquivo.name, arquivo.type);
+  if (previaPropria) ui.el.insertBefore(previaPropria, ui.t);
   const progresso = new Map();
 
   await Promise.all(alvos.map(async (par) => {
@@ -481,6 +660,10 @@ function finalizarRecepcao(par, d) {
 
   r.bar.remove();
   r.t.replaceWith(link);
+
+  // Imagem, vídeo ou áudio: mostra no chat, com o link de download logo abaixo
+  const previa = criarPreview(blob, r.nome, r.tipo);
+  if (previa) r.el.insertBefore(previa, link);
 }
 
 /* --------------------------- Voz e tela (mídia) --------------------------- */
@@ -750,7 +933,12 @@ async function compartilharTela() {
         frameRate: { ideal: q.fps, max: q.fps }
       },
       // Som da transmissão sem processamento de voz (senão música e jogos ficam abafados)
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      audio: {
+        echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+        // Chrome/Edge 140+ (Windows e Mac): não captura o som que ESTA página toca. Assim a voz
+        // do Voice chat e os vídeos do chat não voltam pela transmissão (ninguém ouve a própria voz).
+        restrictOwnAudio: true
+      },
       selfBrowserSurface: 'exclude', // não oferece esta própria aba para compartilhar
       systemAudio: 'include'         // já deixa marcada a opção de compartilhar o som
     });
@@ -770,6 +958,18 @@ async function compartilharTela() {
     sistema('⚠️ Sua transmissão está SEM SOM. Para incluir o som, ao compartilhar escolha "Tela inteira" ' +
       'e ative "Compartilhar áudio do sistema" (Windows), ou escolha uma "Guia" e ative "Compartilhar áudio ' +
       'da guia". Janelas e o Firefox não enviam som; no Mac só funciona o som de uma guia do Chrome/Edge.');
+  }
+
+  // Tela inteira + Voice chat: confere se a voz do chat ficou fora do som compartilhado
+  const faixaAudio = telaStream.getAudioTracks()[0];
+  if (faixaAudio && micStream) {
+    const superficie = (faixaVideo.getSettings() || {}).displaySurface; // 'monitor' = tela inteira
+    const ajustes = faixaAudio.getSettings ? faixaAudio.getSettings() : {};
+    if (superficie === 'monitor' && ajustes.restrictOwnAudio !== true) {
+      sistema('⚠️ Não consegui confirmar que a voz do Voice chat ficou fora do som compartilhado. ' +
+        'Se quem assiste ouvir a própria voz, atualize o Chrome/Edge (versão 140 ou mais nova, Windows ou Mac) ' +
+        'ou compartilhe uma guia em vez da tela inteira.');
+    }
   }
 
   pares.forEach((par) => chamar(par, 'screen'));

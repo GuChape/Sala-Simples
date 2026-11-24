@@ -95,7 +95,9 @@ let meuSlot = 0;
 let sala = '';
 let meuNome = '';
 let micStream = null;
-let telaStream = null;
+let telaStream = null;   // captura original (prévia local)
+let telaEnvio = null;    // o que realmente é enviado: vídeo + áudio já sem a voz do Voice chat
+let iniciandoTela = false;
 let meuEmoji = '🙂';
 let qualidadeTela = 'equilibrada';
 
@@ -742,7 +744,7 @@ function fecharChamadaDeEntrada(id, tipo) {
 
 // Chamada de saída: eu mando minha voz ou minha tela para um par.
 function chamar(par, tipo) {
-  const stream = tipo === 'voice' ? micStream : telaStream;
+  const stream = tipo === 'voice' ? micStream : (telaEnvio || telaStream);
   if (!stream || !peer || par.saida[tipo]) return;
 
   const call = peer.call(par.id, stream, {
@@ -810,6 +812,8 @@ function mostrarMidia(idPar, tipo, stream) {
     }
     audio.srcObject = stream;
     audio.play().catch(() => {});
+    // Se estou transmitindo a tela, esta voz serve de referência para tirá-la do som da transmissão
+    adicionarReferenciaEco(chave, stream);
     return;
   }
 
@@ -844,6 +848,7 @@ function mostrarMidia(idPar, tipo, stream) {
 
 function removerMidia(idPar, tipo) {
   const chave = idPar + '-' + tipo;
+  if (tipo === 'voice') removerReferenciaEco(chave);
   document.querySelectorAll('[data-chave="' + chave + '"]').forEach((el) => el.remove());
   atualizarPalcoVazio();
 }
@@ -920,83 +925,201 @@ $('btn-mudo').addEventListener('click', () => {
   $('btn-mudo').textContent = faixa.enabled ? 'Silenciar' : 'Reativar microfone';
 });
 
+/* ---- Cancelamento de eco da transmissão ---- */
+
+// Ao compartilhar a tela com som, o navegador captura TUDO o que toca no computador,
+// inclusive a voz das outras pessoas do Voice chat. Sem tratamento, quem falou se ouve
+// de volta na transmissão. Aqui a transmissão passa por um filtro (cancelador-eco.js)
+// que recebe como referência as mesmas vozes que estou tocando e as subtrai do som
+// capturado. Funciona em qualquer navegador, com tela inteira ou janela.
+let eco = null; // { ctx, no, fonte, barramento, destino, fontes: Map(chave -> nó) }
+
+// Precisa ser chamada direto no clique (política de autoplay) e devolve o contexto pronto, ou null.
+async function prepararEco() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx || !window.AudioWorkletNode) return null;
+  let ctx;
+  try {
+    ctx = new Ctx({ sampleRate: 48000, latencyHint: 'interactive' });
+  } catch (e) {
+    try { ctx = new Ctx(); } catch (e2) { return null; }
+  }
+  ctx.resume().catch(() => {});
+  try {
+    await ctx.audioWorklet.addModule('cancelador-eco.js');
+  } catch (e) {
+    console.error('Não consegui carregar o cancelador de eco', e);
+    ctx.close().catch(() => {});
+    return null;
+  }
+  return ctx;
+}
+
+// Liga o áudio capturado ao filtro e devolve a faixa de áudio limpa.
+async function montarEco(ctx, faixaAudio) {
+  const no = new AudioWorkletNode(ctx, 'cancelador-eco', {
+    numberOfInputs: 2,            // 0 = som capturado da tela, 1 = vozes que estou tocando
+    numberOfOutputs: 1,
+    outputChannelCount: [2],
+    channelCount: 2,
+    channelCountMode: 'explicit',
+    channelInterpretation: 'speakers'
+  });
+  const fonte = ctx.createMediaStreamSource(new MediaStream([faixaAudio]));
+  const barramento = ctx.createGain();   // soma de todas as vozes que estou tocando
+  const destino = ctx.createMediaStreamDestination();
+  fonte.connect(no, 0, 0);
+  barramento.connect(no, 0, 1);
+  no.connect(destino);
+  eco = { ctx, no, fonte, barramento, destino, fontes: new Map() };
+
+  // vozes que já estão tocando neste momento
+  document.querySelectorAll('#audios audio').forEach((a) => {
+    if (a.srcObject) adicionarReferenciaEco(a.dataset.chave, a.srcObject);
+  });
+
+  // Se o navegador deixar o contexto suspenso, a transmissão ficaria muda: então desiste
+  await Promise.race([ctx.resume(), esperar(1500)]);
+  if (ctx.state !== 'running') throw new Error('contexto de áudio não iniciou');
+  return destino.stream.getAudioTracks()[0];
+}
+
+function adicionarReferenciaEco(chave, stream) {
+  if (!eco || !stream || !stream.getAudioTracks().length) return;
+  removerReferenciaEco(chave);
+  try {
+    const fonte = eco.ctx.createMediaStreamSource(stream);
+    fonte.connect(eco.barramento);
+    eco.fontes.set(chave, fonte);
+  } catch (e) {
+    console.error('Referência de eco indisponível', e);
+  }
+}
+
+function removerReferenciaEco(chave) {
+  if (!eco) return;
+  const fonte = eco.fontes.get(chave);
+  if (!fonte) return;
+  try { fonte.disconnect(); } catch (e) { /* já desconectada */ }
+  eco.fontes.delete(chave);
+}
+
+function fecharEco() {
+  if (!eco) return;
+  const ctx = eco.ctx;
+  eco = null;
+  ctx.close().catch(() => {});
+}
+
 /* ---- Tela ---- */
 
 async function compartilharTela() {
+  if (iniciandoTela || telaStream) return;
+  iniciandoTela = true;
   qualidadeTela = $('sel-qualidade').value;
   const q = QUALIDADES_TELA[qualidadeTela];
+
+  // O contexto de áudio do cancelador precisa nascer no clique; o resto carrega em paralelo
+  const preparoEco = prepararEco();
+
   try {
-    telaStream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        width: { ideal: q.largura, max: q.largura },
-        height: { ideal: q.altura, max: q.altura },
-        frameRate: { ideal: q.fps, max: q.fps }
-      },
-      // Som da transmissão sem processamento de voz (senão música e jogos ficam abafados)
-      audio: {
-        echoCancellation: false, noiseSuppression: false, autoGainControl: false,
-        // Chrome/Edge 140+ (Windows e Mac): não captura o som que ESTA página toca. Assim a voz
-        // do Voice chat e os vídeos do chat não voltam pela transmissão (ninguém ouve a própria voz).
-        restrictOwnAudio: true
-      },
-      selfBrowserSurface: 'exclude', // não oferece esta própria aba para compartilhar
-      systemAudio: 'include'         // já deixa marcada a opção de compartilhar o som
-    });
-  } catch (e) {
-    sistema('Compartilhamento de tela cancelado ou não permitido.');
-    return;
-  }
-  // Se a pessoa parar pelo botão do próprio navegador
-  const faixaVideo = telaStream.getVideoTracks()[0];
-  faixaVideo.addEventListener('ended', pararTela);
-  // Dica para o codec: "motion" prioriza fluidez, "detail" prioriza nitidez (texto)
-  if ('contentHint' in faixaVideo) faixaVideo.contentHint = q.dica;
-
-  // O navegador só envia som se a pessoa marcar a opção no seletor de tela.
-  const temSom = telaStream.getAudioTracks().length > 0;
-  if (!temSom) {
-    sistema('⚠️ Sua transmissão está SEM SOM. Para incluir o som, ao compartilhar escolha "Tela inteira" ' +
-      'e ative "Compartilhar áudio do sistema" (Windows), ou escolha uma "Guia" e ative "Compartilhar áudio ' +
-      'da guia". Janelas e o Firefox não enviam som; no Mac só funciona o som de uma guia do Chrome/Edge.');
-  }
-
-  // Tela inteira + Voice chat: confere se a voz do chat ficou fora do som compartilhado
-  const faixaAudio = telaStream.getAudioTracks()[0];
-  if (faixaAudio && micStream) {
-    const superficie = (faixaVideo.getSettings() || {}).displaySurface; // 'monitor' = tela inteira
-    const ajustes = faixaAudio.getSettings ? faixaAudio.getSettings() : {};
-    if (superficie === 'monitor' && ajustes.restrictOwnAudio !== true) {
-      sistema('⚠️ Não consegui confirmar que a voz do Voice chat ficou fora do som compartilhado. ' +
-        'Se quem assiste ouvir a própria voz, atualize o Chrome/Edge (versão 140 ou mais nova, Windows ou Mac) ' +
-        'ou compartilhe uma guia em vez da tela inteira.');
+    let captura;
+    try {
+      captura = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          width: { ideal: q.largura, max: q.largura },
+          height: { ideal: q.altura, max: q.altura },
+          frameRate: { ideal: q.fps, max: q.fps }
+        },
+        // Som da transmissão sem processamento de voz (senão música e jogos ficam abafados)
+        audio: {
+          echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+          // Chrome/Edge 140+ (Windows e Mac): já deixa de capturar o som desta página.
+          // Não dependemos disso: o cancelador abaixo cobre os demais casos.
+          restrictOwnAudio: true
+        },
+        selfBrowserSurface: 'exclude', // não oferece esta própria aba para compartilhar
+        systemAudio: 'include'         // já deixa marcada a opção de compartilhar o som
+      });
+    } catch (e) {
+      sistema('Compartilhamento de tela cancelado ou não permitido.');
+      const ctx = await preparoEco;
+      if (ctx) ctx.close().catch(() => {});
+      return;
     }
+
+    const faixaVideo = captura.getVideoTracks()[0];
+    const faixaAudio = captura.getAudioTracks()[0];
+    const temSom = !!faixaAudio;
+    const ctxEco = await preparoEco;
+
+    // Som da transmissão: passa pelo cancelador para tirar a voz do Voice chat
+    let envio = captura;
+    if (faixaAudio && ctxEco) {
+      try {
+        const faixaLimpa = await montarEco(ctxEco, faixaAudio);
+        envio = new MediaStream([faixaVideo, faixaLimpa]);
+      } catch (e) {
+        console.error('Cancelador de eco falhou', e);
+        fecharEco();
+        ctxEco.close().catch(() => {});
+        sistema('⚠️ Não consegui ativar o filtro que tira a voz do Voice chat do som da transmissão. ' +
+          'Se quem assiste se ouvir de volta, compartilhe uma guia em vez da tela inteira.');
+      }
+    } else if (ctxEco) {
+      ctxEco.close().catch(() => {});
+    } else if (faixaAudio) {
+      sistema('⚠️ Este navegador não permite filtrar a voz do Voice chat do som da transmissão. ' +
+        'Se quem assiste se ouvir de volta, compartilhe uma guia em vez da tela inteira.');
+    }
+
+    telaStream = captura;
+    telaEnvio = envio;
+
+    // Se a pessoa parar pelo botão do próprio navegador
+    faixaVideo.addEventListener('ended', pararTela);
+    if (faixaVideo.readyState === 'ended') { pararTela(); return; }
+    // Dica para o codec: "motion" prioriza fluidez, "detail" prioriza nitidez (texto)
+    if ('contentHint' in faixaVideo) faixaVideo.contentHint = q.dica;
+
+    // O navegador só envia som se a pessoa marcar a opção no seletor de tela.
+    if (!temSom) {
+      sistema('⚠️ Sua transmissão está SEM SOM. Para incluir o som, ao compartilhar escolha "Tela inteira" ' +
+        'e ative "Compartilhar áudio do sistema" (Windows), ou escolha uma "Guia" e ative "Compartilhar áudio ' +
+        'da guia". Janelas e o Firefox não enviam som; no Mac só funciona o som de uma guia do Chrome/Edge.');
+    }
+
+    pares.forEach((par) => chamar(par, 'screen'));
+
+    // Prévia local
+    const fig = document.createElement('figure');
+    fig.dataset.chave = 'eu-screen';
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.muted = true; // evita eco do próprio áudio
+    video.playsInline = true;
+    video.srcObject = telaStream;
+    const legenda = document.createElement('figcaption');
+    legenda.textContent = 'Sua tela (prévia)' + (temSom ? ' 🔊 com som' : ' 🔇 sem som');
+    fig.append(video, legenda);
+    $('videos').appendChild(fig);
+    atualizarPalcoVazio();
+
+    $('btn-tela').textContent = '⏹️ Parar de compartilhar';
+    $('btn-tela').classList.add('ativo');
+    $('sel-qualidade').disabled = true; // a qualidade vale a partir do início da transmissão
+  } finally {
+    iniciandoTela = false;
   }
-
-  pares.forEach((par) => chamar(par, 'screen'));
-
-  // Prévia local
-  const fig = document.createElement('figure');
-  fig.dataset.chave = 'eu-screen';
-  const video = document.createElement('video');
-  video.autoplay = true;
-  video.muted = true; // evita eco do próprio áudio
-  video.playsInline = true;
-  video.srcObject = telaStream;
-  const legenda = document.createElement('figcaption');
-  legenda.textContent = 'Sua tela (prévia)' + (temSom ? ' 🔊 com som' : ' 🔇 sem som');
-  fig.append(video, legenda);
-  $('videos').appendChild(fig);
-  atualizarPalcoVazio();
-
-  $('btn-tela').textContent = '⏹️ Parar de compartilhar';
-  $('btn-tela').classList.add('ativo');
-  $('sel-qualidade').disabled = true; // a qualidade vale a partir do início da transmissão
 }
 
 function pararTela() {
   if (!telaStream) return;
   telaStream.getTracks().forEach((t) => t.stop());
+  if (telaEnvio) telaEnvio.getTracks().forEach((t) => t.stop());
   telaStream = null;
+  telaEnvio = null;
+  fecharEco();
   pares.forEach((par) => {
     if (par.saida.screen) par.saida.screen.close();
     par.saida.screen = null;

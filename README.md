@@ -30,6 +30,15 @@ O projeto usa [PeerJS](https://peerjs.com/), uma biblioteca sobre **WebRTC**, a 
 - Cada par de pessoas tem uma conexão de dados (chat e arquivos) e, quando necessário, chamadas de mídia (voz e tela).
 - O servidor público do PeerJS é usado **apenas para apresentar os navegadores uns aos outros**. Mensagens, arquivos, áudio e vídeo trafegam direto entre os participantes.
 
+### Eco na transmissão de tela
+
+Ao compartilhar a tela com som, o navegador captura tudo o que toca no computador, inclusive a voz das outras pessoas do Voice chat. Sem tratamento, quem falou se ouviria de volta na transmissão. Para evitar isso, o som capturado passa por um **cancelador de eco** (`cancelador-eco.js`, um `AudioWorklet`) antes de ser enviado:
+
+- Quem transmite tem uma cópia digital exata das vozes que está tocando. Elas servem de referência.
+- Um filtro adaptativo (no domínio da frequência, cobrindo atrasos de até ~250 ms) aprende o caminho caixa de som → captura (atraso e volume) e subtrai a voz do som capturado.
+- O som do que está na tela (vídeo, jogo, música) passa praticamente intacto. Em testes simulados o eco cai ~40 dB sozinho e some por completo quando há música junto.
+- Roda no próprio navegador de quem transmite, usa poucos % de um núcleo e não envia nada para fora.
+
 ### Envio de arquivos
 
 O arquivo é cortado em pedaços de 64 KB e enviado pelo canal de dados do WebRTC, com controle de fluxo para não sobrecarregar a conexão. Quem recebe remonta o arquivo e libera o download ao final.
@@ -61,7 +70,7 @@ A chave fica visível no código público do site. Para uso entre amigos isso é
 ## Dicas
 
 - **Fones de ouvido:** marque "Estou de fones" para desligar o cancelamento de eco; a voz fica mais natural. Sem fones, deixe desmarcado: com o eco desligado, o som que sai das caixas de som entra no microfone e os outros ouvem.
-- **Som na transmissão de tela:** ao compartilhar, escolha "Tela inteira" e deixe ativo "Compartilhar áudio do sistema" (Windows), ou escolha uma "Guia" e ative "Compartilhar áudio da guia". Janelas e o Firefox não enviam som, e no Mac só o som de uma guia do Chrome/Edge funciona. A legenda do vídeo mostra 🔊 (com som) ou 🔇 (sem som). No Chrome/Edge 140 ou mais novo (Windows e Mac), o som que a própria página toca, como a voz do Voice chat e os vídeos do chat, fica de fora da transmissão, então ninguém ouve a própria voz de volta. Em outros navegadores ou versões mais antigas isso não é garantido; nesse caso compartilhe uma guia em vez da tela inteira.
+- **Som na transmissão de tela:** ao compartilhar, escolha "Tela inteira" e deixe ativo "Compartilhar áudio do sistema" (Windows), ou escolha uma "Guia" e ative "Compartilhar áudio da guia". Janelas e o Firefox não enviam som, e no Mac só o som de uma guia do Chrome/Edge funciona. A legenda do vídeo mostra 🔊 (com som) ou 🔇 (sem som). Se o Voice chat estiver ativo, a voz das outras pessoas que toca no seu computador é removida do som da transmissão por um filtro de cancelamento de eco (veja abaixo), então ninguém ouve a própria voz de volta, seja qualquer tela, janela ou guia. Nos primeiros segundos de conversa o filtro ainda está aprendendo e pode deixar passar um pouco de eco. Se o navegador não suportar o filtro, o app avisa no chat e a saída é compartilhar uma guia em vez da tela inteira.
 - **Qualidade da tela:** escolha antes de compartilhar. "1080p 30 fps" é melhor para texto e slides; "720p 60 fps" é mais leve se a internet de quem transmite for lenta.
 - **Windows diminuindo outros sons enquanto você fala:** é uma configuração do sistema. Vá em *Painel de Controle → Som → aba Comunicações* e marque "Não fazer nada".
 
@@ -71,6 +80,7 @@ A chave fica visível no código público do site. Para uso entre amigos isso é
 ├── index.html   # estrutura da página
 ├── style.css    # estilo
 ├── app.js       # chat, voz, tela, arquivos e conexão P2P
+├── cancelador-eco.js  # filtro que tira a voz do Voice chat do som da transmissão
 └── README.md
 ```
 

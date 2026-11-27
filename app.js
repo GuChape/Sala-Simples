@@ -98,8 +98,7 @@ let micStream = null;
 let telaStream = null;   // captura original (prévia local)
 let telaEnvio = null;    // o que realmente é enviado: vídeo + áudio já sem a voz do Voice chat
 let cameraStream = null; // câmera (só vídeo, sem áudio; a voz continua no Voice chat)
-// 720p 30 fps; o seletor de qualidade entra na W3
-// Qualidades da câmera (W3). Bitrate e fps valem por destinatário: cada câmera envia um vídeo para cada pessoa no Voice chat.
+// Qualidades da câmera (720p 30 fps é o padrão). Bitrate e fps valem por destinatário: cada câmera envia um vídeo para cada pessoa no Voice chat.
 const QUALIDADES_CAMERA = {
   leve:   { largura: 640,  altura: 480,  fps: 15, bitrate: 400000,  prioridade: 'maintain-framerate' },
   padrao: { largura: 1280, altura: 720,  fps: 30, bitrate: 1200000, prioridade: 'balanced' },
@@ -118,7 +117,7 @@ let qualidadeTela = 'equilibrada';
 // conexões que tentei abrir e ainda não responderam: id -> timer de aviso
 const pendentes = new Map();
 
-// id do outro peer -> { id, nome, emoji, cor, conn, saida: {voice, screen}, naVoz, anunciado }
+// id do outro peer -> { id, nome, emoji, cor, conn, saida: {voice, screen, camera}, naVoz, camera, anunciado }
 // saida = chamadas de mídia que EU enviei para essa pessoa
 // naVoz = essa pessoa está no Voice chat?
 const pares = new Map();
@@ -723,7 +722,9 @@ function finalizarRecepcao(par, d) {
 // Reescreve a linha "a=fmtp" do Opus no SDP com os parâmetros de qualidade.
 // Quem manda o áudio usa o que o RECEPTOR pede, por isso aplicamos tanto ao
 // iniciar a chamada quanto ao atendê-la.
-function ajustarOpus(sdp, { stereo, bitrate }) {
+function ajustarOpus(sdp, opcoes) {
+  if (!opcoes) return sdp; // ex.: câmera (só vídeo) não tem ajuste de Opus
+  const { stereo, bitrate } = opcoes;
   const rtpmap = sdp.match(/a=rtpmap:(\d+) opus\/48000\/2/i);
   if (!rtpmap) return sdp;
   const pt = rtpmap[1];
@@ -813,6 +814,7 @@ function chamar(par, tipo) {
     metadata: { tipo },
     sdpTransform: (sdp) => ajustarOpus(sdp, OPUS[tipo])
   });
+  if (!call) return; // o PeerJS devolve undefined com o servidor de sinalização desconectado
   par.saida[tipo] = call;
 
   const limpar = () => { if (par.saida[tipo] === call) par.saida[tipo] = null; };
@@ -1103,7 +1105,7 @@ async function trocarCamera() {
   removerMidia('eu', 'camera');
   mostrarMidia('eu', 'camera', novo);
   const fig = document.querySelector('figure[data-chave="eu-camera"]');
-  if (fig && navigator.mediaDevices) fig.classList.toggle('espelho', facingAtual === 'user');
+  if (fig) fig.classList.toggle('espelho', facingAtual === 'user');
 }
 
 function pararCamera() {

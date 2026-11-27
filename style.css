@@ -43,7 +43,7 @@ input[type="text"], input:not([type]) {
   border: 1px solid var(--borda);
   border-radius: 6px;
   padding: 10px;
-  font-size: 0.95rem;
+  font-size: 16px; /* 16px ou mais: o iPhone não dá zoom ao focar o campo */
 }
 
 /* Entrada */
@@ -68,7 +68,7 @@ input[type="text"], input:not([type]) {
 .card label { display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; color: var(--muted); }
 
 /* App */
-#app { height: 100%; display: flex; flex-direction: column; }
+#app { height: 100%; height: 100dvh; display: flex; flex-direction: column; }
 header {
   display: flex;
   align-items: center;
@@ -91,11 +91,34 @@ header .muted { margin-left: 10px; }
   min-height: 0;
   overflow: auto;
 }
-#videos { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; }
+#videos { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 10px; }
 #videos figure { margin: 0; background: #000; border-radius: 8px; overflow: hidden; }
 #videos video { width: 100%; display: block; max-height: 70vh; background: #000; }
 #videos figcaption { padding: 6px 10px; background: var(--painel); font-size: 0.85rem; }
 #vazio { text-align: center; padding: 40px 0; }
+
+/* Quadros de tela e câmera (W2) */
+#videos figure { position: relative; }
+/* Só a SUA prévia é espelhada, como num espelho. O que os outros recebem fica normal. */
+#videos figure.espelho video { transform: scaleX(-1); }
+.ampliar {
+  position: absolute; top: 6px; right: 6px;
+  padding: 4px 9px; line-height: 1; font-size: 1rem;
+  background: rgba(0, 0, 0, 0.6); color: #fff;
+}
+.ampliar:hover:not(:disabled) { background: rgba(0, 0, 0, 0.8); }
+/* Tela cheia: o quadro ocupa a tela toda, com o vídeo centralizado e a legenda embaixo */
+figure:fullscreen, figure:-webkit-full-screen {
+  width: 100%; height: 100%; max-height: none; border-radius: 0;
+  display: flex; flex-direction: column; justify-content: center; background: #000;
+}
+figure:fullscreen video, figure:-webkit-full-screen video {
+  width: 100%; height: 100%; max-height: none; object-fit: contain; flex: 1; min-height: 0;
+}
+figure:fullscreen figcaption, figure:-webkit-full-screen figcaption {
+  position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.6);
+}
+figure:fullscreen .ampliar, figure:-webkit-full-screen .ampliar { top: 14px; right: 14px; }
 #controles { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: auto; }
 #controles select {
   background: var(--borda);
@@ -103,7 +126,7 @@ header .muted { margin-left: 10px; }
   border: 0;
   border-radius: 6px;
   padding: 9px 10px;
-  font-size: 0.9rem;
+  font-size: 16px;
   cursor: pointer;
 }
 #controles select:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -140,10 +163,12 @@ header .muted { margin-left: 10px; }
   margin: auto;            /* centraliza sem cortar quando a imagem ampliada passa da tela */
   max-width: 92vw;
   max-height: 88vh;
+  max-height: 88dvh;
   object-fit: contain;
   cursor: zoom-in;
   user-select: none;
   -webkit-user-drag: none;
+  touch-action: none;      /* no toque, o arrasto da imagem ampliada fica com o app */
 }
 .lightbox img.ampliada { cursor: zoom-out; }
 .lightbox-fechar {
@@ -163,6 +188,11 @@ header .muted { margin-left: 10px; }
 
 /* Celular */
 @media (max-width: 800px) {
-  .layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .layout { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1.2fr) minmax(0, 1fr); }
   #chat { border-left: 0; border-top: 1px solid var(--borda); }
+}
+
+/* Alvos de toque com pelo menos 44 px (recomendação de acessibilidade) */
+@media (pointer: coarse) {
+  button, select { min-height: 44px; }
 }

@@ -97,6 +97,20 @@ let meuNome = '';
 let micStream = null;
 let telaStream = null;   // captura original (prévia local)
 let telaEnvio = null;    // o que realmente é enviado: vídeo + áudio já sem a voz do Voice chat
+let cameraStream = null; // câmera (só vídeo, sem áudio; a voz continua no Voice chat)
+// 720p 30 fps; o seletor de qualidade entra na W3
+// Qualidades da câmera (W3). Bitrate e fps valem por destinatário: cada câmera envia um vídeo para cada pessoa no Voice chat.
+const QUALIDADES_CAMERA = {
+  leve:   { largura: 640,  altura: 480,  fps: 15, bitrate: 400000,  prioridade: 'maintain-framerate' },
+  padrao: { largura: 1280, altura: 720,  fps: 30, bitrate: 1200000, prioridade: 'balanced' },
+  nitida: { largura: 1920, altura: 1080, fps: 30, bitrate: 2500000, prioridade: 'maintain-resolution' }
+};
+let qualidadeCamera = 'padrao';
+let avisouBandaCamera = false;
+
+function restricoesCamera(q) {
+  return { width: { ideal: q.largura }, height: { ideal: q.altura }, frameRate: { ideal: q.fps, max: q.fps }, facingMode: 'user' };
+}
 let iniciandoTela = false;
 let meuEmoji = '🙂';
 let qualidadeTela = 'equilibrada';
@@ -172,13 +186,13 @@ function adicionarMensagem(autor, texto, propria, cor, emoji) {
 function atualizarPessoas() {
   const el = $('pessoas');
   el.textContent = '';
-  const lista = [{ nome: meuNome + ' (você)', emoji: meuEmoji, cor: corDoSlot(meuSlot), naVoz: !!micStream }];
+  const lista = [{ nome: meuNome + ' (você)', emoji: meuEmoji, cor: corDoSlot(meuSlot), naVoz: !!micStream, camera: !!cameraStream }];
   pares.forEach((p) => lista.push(p));
   lista.forEach((p, i) => {
     if (i) el.append(', ');
     const s = document.createElement('span');
     // 🎙️ ao lado de quem está no Voice chat
-    s.textContent = p.emoji + ' ' + p.nome + (p.naVoz ? ' 🎙️' : '');
+    s.textContent = p.emoji + ' ' + p.nome + (p.naVoz ? ' 🎙️' : '') + (p.camera ? ' 📷' : '');
     s.style.color = p.cor;
     el.appendChild(s);
   });
@@ -227,20 +241,32 @@ function abrirPeer(ordem, indice) {
 
   const slot = ordem[indice];
   const p = new Peer(PREFIXO + sala + '-' + slot, CONFIG_PEER);
+  let ouvintesOk = false;   // registra os ouvintes só uma vez, mesmo após reconectar
+  let avisouEntrada = false;
 
   p.on('open', () => {
     peer = p;
     meuSlot = slot;
     $('status').textContent = 'Conectado' + (temTurn ? ' · TURN ativo' : ' · sem TURN');
     atualizarPessoas();
-    sistema('Você entrou na sala.');
+    if (!avisouEntrada) { avisouEntrada = true; sistema('Você entrou na sala.'); }
 
-    p.on('connection', (conn) => registrarConexao(conn, false));
-    p.on('call', receberChamada);
-    p.on('disconnected', () => {
-      $('status').textContent = 'Reconectando...';
-      p.reconnect();
-    });
+    if (!ouvintesOk) {
+      ouvintesOk = true;
+      p.on('connection', (conn) => registrarConexao(conn, false));
+      p.on('call', receberChamada);
+      p.on('disconnected', () => {
+        $('status').textContent = 'Reconectando...';
+        const tentar = () => {
+          if (p.destroyed) return;
+          if (p.disconnected) p.reconnect();
+          else if ($('status').textContent === 'Reconectando...') $('status').textContent = 'Conectado' + (temTurn ? ' · TURN ativo' : ' · sem TURN');
+          // se ainda não voltou, tenta de novo em 5 s
+          if (p.disconnected) setTimeout(tentar, 5000);
+        };
+        setTimeout(tentar, 1000);
+      });
+    }
 
     // Tenta falar com todas as outras vagas
     for (let i = 1; i <= MAX_SLOTS; i++) {
@@ -324,7 +350,7 @@ function registrarConexao(conn, souIniciador) {
       par.conn = conn;
     }
 
-    conn.send({ t: 'hello', nome: meuNome, emoji: meuEmoji, voz: !!micStream });
+    conn.send({ t: 'hello', nome: meuNome, emoji: meuEmoji, voz: !!micStream, cam: !!cameraStream });
     atualizarPessoas();
   });
 
@@ -344,6 +370,7 @@ function removerPar(id) {
   Object.values(par.saida).forEach((c) => c && c.close());
   fecharChamadaDeEntrada(id, 'voice');
   fecharChamadaDeEntrada(id, 'screen');
+  fecharChamadaDeEntrada(id, 'camera');
 
   // Transferências em andamento desse par falharam
   recebendo.forEach((r, chave) => {
@@ -368,7 +395,9 @@ function receberDados(conn, d) {
       par.nome = d.nome || 'Anônimo';
       par.emoji = d.emoji || '🙂';
       par.naVoz = !!d.voz;
+      par.camera = !!d.cam;
       if (par.naVoz && micStream) chamar(par, 'voice'); // já estamos os dois no Voice chat
+      if (par.naVoz && cameraStream) chamar(par, 'camera');
       if (!par.anunciado) {
         par.anunciado = true;
         sistema(par.nome + ' entrou na sala.');
@@ -385,16 +414,31 @@ function receberDados(conn, d) {
         fecharChamadaDeSaida(par, 'voice'); // garante uma chamada nova
         chamar(par, 'voice');
       }
+      // Quem entrou no Voice chat agora também recebe minha câmera, se estiver ligada
+      if (cameraStream) {
+        fecharChamadaDeSaida(par, 'camera');
+        chamar(par, 'camera');
+      }
       atualizarPessoas();
       break;
     case 'voz-parou':
       par.naVoz = false;
       fecharChamadaDeSaida(par, 'voice');   // essa pessoa não está mais ouvindo
+      fecharChamadaDeSaida(par, 'camera');  // câmera só vai para quem está no Voice chat
       fecharChamadaDeEntrada(par.id, 'voice');
       atualizarPessoas();
       break;
     case 'tela-parou':
       fecharChamadaDeEntrada(par.id, 'screen');
+      break;
+    case 'cam-ligou':
+      par.camera = true;
+      atualizarPessoas();
+      break;
+    case 'cam-parou':
+      par.camera = false;
+      fecharChamadaDeEntrada(par.id, 'camera');
+      atualizarPessoas();
       break;
     case 'arq-ini':
       iniciarRecepcao(par, d);
@@ -451,9 +495,11 @@ function criarPreview(fonte, nome, mime) {
   const caixa = document.createElement('div');
   caixa.className = 'preview';
 
+  const ext = (nome.split('.').pop() || '').toUpperCase();
   const falhou = () => {
     caixa.className = 'preview erro';
-    caixa.textContent = 'Este navegador não consegue exibir o arquivo aqui. Use o link para baixar.';
+    const verbo = tipo === 'imagem' ? 'exibir' : 'tocar';
+    caixa.textContent = 'Este navegador não consegue ' + verbo + ' ' + ext + ' aqui. Use o link para baixar; MP4 (H.264) toca na maioria dos navegadores.';
   };
 
   if (tipo === 'imagem') {
@@ -633,6 +679,10 @@ $('arquivo').addEventListener('change', (e) => {
 
 function iniciarRecepcao(par, d) {
   const ui = criarItemArquivo(par.nome + ' está enviando ' + d.nome + ' (' + formatarTamanho(d.tamanho) + ')');
+  // O receptor guarda o arquivo inteiro na memória. Celulares têm bem menos memória por aba.
+  const celular = /iPhone|iPad|Android/i.test(navigator.userAgent);
+  const limite = celular ? 400 * 1024 * 1024 : 2 * 1024 * 1024 * 1024;
+  if (d.tamanho > limite) ui.t.textContent += ' · pode falhar neste aparelho (memória insuficiente)';
   recebendo.set(par.id + ':' + d.id, {
     nome: d.nome, tamanho: d.tamanho, tipo: d.tipo, partes: [], recebido: 0,
     el: ui.el, t: ui.t, bar: ui.bar
@@ -707,6 +757,7 @@ function ajustarOpus(sdp, { stereo, bitrate }) {
 
 // Ajusta bitrate, fps e prioridade do vídeo enviado. O navegador só aceita
 // isso depois que a negociação avança, então tentamos por alguns segundos.
+let avisouQualidade = false;
 async function aplicarQualidadeVideo(call, q) {
   for (let i = 0; i < 30; i++) {
     try {
@@ -719,7 +770,18 @@ async function aplicarQualidadeVideo(call, q) {
           params.encodings[0].maxFramerate = q.fps;
           params.encodings[0].scaleResolutionDownBy = 1;
           params.degradationPreference = q.prioridade;
-          await sender.setParameters(params);
+          try {
+            await sender.setParameters(params);
+          } catch (e) {
+            // Alguns navegadores recusam a prioridade de degradação: aplica sem ela
+            delete params.degradationPreference;
+            await sender.setParameters(params);
+            console.warn('Navegador não aceitou a prioridade de qualidade; bitrate e fps limitados.');
+            if (!avisouQualidade) {
+              avisouQualidade = true;
+              sistema('Seu navegador não aceitou a prioridade de qualidade. A transmissão segue com bitrate e fps limitados.');
+            }
+          }
           return;
         }
       }
@@ -744,7 +806,7 @@ function fecharChamadaDeEntrada(id, tipo) {
 
 // Chamada de saída: eu mando minha voz ou minha tela para um par.
 function chamar(par, tipo) {
-  const stream = tipo === 'voice' ? micStream : (telaEnvio || telaStream);
+  const stream = tipo === 'voice' ? micStream : tipo === 'camera' ? cameraStream : (telaEnvio || telaStream);
   if (!stream || !peer || par.saida[tipo]) return;
 
   const call = peer.call(par.id, stream, {
@@ -756,6 +818,15 @@ function chamar(par, tipo) {
   const limpar = () => { if (par.saida[tipo] === call) par.saida[tipo] = null; };
   call.on('close', limpar);
   call.on('error', limpar);
+
+  if (tipo === 'camera') {
+    aplicarQualidadeVideo(call, QUALIDADES_CAMERA[qualidadeCamera]);
+    const destinatarios = [...pares.values()].filter((p) => p.naVoz).length;
+    if (destinatarios >= 3 && !avisouBandaCamera) {
+      avisouBandaCamera = true;
+      sistema('Sua câmera está indo para ' + destinatarios + ' pessoas. Cada uma recebe um vídeo separado; se a conexão travar, escolha 480p ou desligue a câmera.');
+    }
+  }
 
   if (tipo === 'screen') {
     const q = QUALIDADES_TELA[qualidadeTela];
@@ -780,12 +851,18 @@ function receberChamada(call) {
     call.close();
     return;
   }
+  // Câmera: só vejo quem está no Voice chat comigo
+  if (tipo === 'camera' && !micStream) {
+    call.close();
+    return;
+  }
 
   const antiga = entradas.get(chave);
   if (antiga && antiga !== call) antiga.close();
   entradas.set(chave, call);
 
-  call.answer(undefined, { sdpTransform: (sdp) => ajustarOpus(sdp, OPUS[tipo]) });
+  if (tipo === 'camera') call.answer();
+  else call.answer(undefined, { sdpTransform: (sdp) => ajustarOpus(sdp, OPUS[tipo]) });
   call.on('stream', (stream) => mostrarMidia(call.peer, tipo, stream));
   call.on('close', () => {
     if (entradas.get(chave) === call) {
@@ -796,10 +873,53 @@ function receberChamada(call) {
   call.on('error', (e) => console.error('Erro na chamada', e));
 }
 
+// Quando o navegador bloqueia o som de uma voz, oferece um botão no chat para liberar
+function mostrarAtivarSom(audio, nome) {
+  if (audio.dataset.avisou) return;
+  audio.dataset.avisou = '1';
+  const d = document.createElement('div');
+  d.className = 'msg sistema';
+  const b = document.createElement('button');
+  b.textContent = '🔊 Ativar som da voz de ' + nome;
+  b.addEventListener('click', () => { audio.play().catch(() => {}); d.remove(); });
+  d.appendChild(b);
+  $('mensagens').appendChild(d);
+  rolarChat();
+}
+
+// Tela cheia: no computador usa o quadro inteiro; no iPhone usa o vídeo nativo
+function telaCheia(fig) {
+  if (!fig) return;
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    return;
+  }
+  const pedir = fig.requestFullscreen || fig.webkitRequestFullscreen;
+  if (pedir) {
+    try { const p = pedir.call(fig); if (p && p.catch) p.catch(() => abrirVideoNativo(fig)); }
+    catch (e) { abrirVideoNativo(fig); }
+  } else {
+    abrirVideoNativo(fig);
+  }
+}
+
+function abrirVideoNativo(fig) {
+  const v = fig.querySelector('video');
+  if (v && v.webkitEnterFullscreen) v.webkitEnterFullscreen();
+  else sistema('Este navegador não permite tela cheia aqui.');
+}
+
+// Um clique no botão ⛶ ou na câmera amplia o quadro
+$('videos').addEventListener('click', (e) => {
+  const botao = e.target.closest && e.target.closest('.ampliar');
+  if (botao) { telaCheia(botao.closest('figure')); return; }
+  if (e.target.tagName === 'VIDEO' && !e.target.controls) telaCheia(e.target.closest('figure'));
+});
+
 function mostrarMidia(idPar, tipo, stream) {
   const chave = idPar + '-' + tipo;
   const par = pares.get(idPar);
-  const nome = par ? par.nome : 'Alguém';
+  const nome = idPar === 'eu' ? 'você' : par ? par.nome : 'Alguém';
 
   if (tipo === 'voice') {
     if (!micStream) return; // fora do Voice chat: não toca a voz de ninguém
@@ -811,28 +931,40 @@ function mostrarMidia(idPar, tipo, stream) {
       $('audios').appendChild(audio);
     }
     audio.srcObject = stream;
-    audio.play().catch(() => {});
+    audio.play().catch(() => mostrarAtivarSom(audio, nome));
     // Se estou transmitindo a tela, esta voz serve de referência para tirá-la do som da transmissão
     adicionarReferenciaEco(chave, stream);
     return;
   }
 
-  // tela
+  // tela ou câmera (câmera não tem áudio e não usa o controle de som)
+  const camera = tipo === 'camera';
   let fig = document.querySelector('figure[data-chave="' + chave + '"]');
   if (!fig) {
     fig = document.createElement('figure');
     fig.dataset.chave = chave;
+    if (camera && idPar === 'eu') fig.classList.add('espelho');
     const video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
-    video.controls = true;
+    video.controls = !camera;
+    video.muted = true;
     const legenda = document.createElement('figcaption');
-    legenda.textContent = 'Tela de ' + nome;
-    fig.append(video, legenda);
+    legenda.textContent = idPar === 'eu' ? 'Sua câmera (prévia)' : camera ? 'Câmera de ' + nome : 'Tela de ' + nome;
+    const ampliar = document.createElement('button');
+    ampliar.className = 'ampliar sec';
+    ampliar.textContent = '⛶';
+    ampliar.title = 'Tela cheia';
+    fig.append(video, legenda, ampliar);
     $('videos').appendChild(fig);
   }
   const v = fig.querySelector('video');
   v.srcObject = stream;
+  if (camera) {
+    v.play().catch(() => {});
+    atualizarPalcoVazio();
+    return;
+  }
   v.muted = false;
   v.play().catch(() => {
     // Se o navegador bloquear o som, toca sem som e avisa
@@ -852,6 +984,156 @@ function removerMidia(idPar, tipo) {
   document.querySelectorAll('[data-chave="' + chave + '"]').forEach((el) => el.remove());
   atualizarPalcoVazio();
 }
+
+/* ---------------------------- Câmera ---------------------------- */
+
+// Traduz o erro do navegador em uma instrução que a pessoa consegue seguir
+function explicarErroCamera(e) {
+  const nome = e && e.name;
+  if (nome === 'NotAllowedError' || nome === 'SecurityError') {
+    return 'Permissão da câmera negada. Libere a câmera no cadeado ao lado do endereço do site e clique de novo.';
+  }
+  if (nome === 'NotFoundError' || nome === 'DevicesNotFoundError') {
+    return 'Nenhuma câmera encontrada neste aparelho.';
+  }
+  if (nome === 'NotReadableError' || nome === 'TrackStartError') {
+    return 'A câmera está sendo usada por outro programa ou aba. Feche-o e tente de novo.';
+  }
+  return 'Não foi possível acessar a câmera.';
+}
+
+function podeCamera() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+}
+
+// Pede a câmera com a qualidade escolhida; se o aparelho não aceitar, tenta com restrições mais simples
+async function capturarCamera(q) {
+  const tentativas = [restricoesCamera(q), { facingMode: 'user' }, true];
+  let erro = null;
+  for (const video of tentativas) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video, audio: false });
+    } catch (e) {
+      erro = e;
+      if (e.name !== 'OverconstrainedError') break;
+    }
+  }
+  throw erro;
+}
+
+async function ligarCamera() {
+  if (cameraStream) return;
+  if (!podeCamera()) {
+    sistema('Seu navegador não permite câmera aqui. Abra o site em HTTPS (como o endereço do GitHub Pages) e use um navegador atualizado.');
+    return;
+  }
+  $('btn-camera').disabled = true;
+  try {
+    cameraStream = await capturarCamera(QUALIDADES_CAMERA[qualidadeCamera]);
+  } catch (e) {
+    sistema(explicarErroCamera(e));
+    return;
+  } finally {
+    $('btn-camera').disabled = false;
+  }
+  // Se o aparelho desconectar a câmera, desliga sozinho
+  cameraStream.getVideoTracks()[0].addEventListener('ended', pararCamera);
+  // Minha câmera vai só para quem está no Voice chat
+  pares.forEach((par) => { if (par.naVoz) chamar(par, 'camera'); });
+  transmitir({ t: 'cam-ligou' });
+  mostrarMidia('eu', 'camera', cameraStream);
+  $('btn-camera').textContent = '📷 Desligar câmera';
+  $('btn-camera').classList.add('ativo');
+  atualizarBotaoTrocar();
+  atualizarPessoas();
+}
+
+// O botão de trocar câmera aparece no celular ou quando há mais de uma câmera
+async function atualizarBotaoTrocar() {
+  let mais = false;
+  try {
+    const coarse = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+    const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+    mais = coarse || cams.length > 1;
+  } catch (e) { mais = false; }
+  $('btn-trocar-cam').hidden = !cameraStream || !mais;
+}
+
+let facingAtual = 'user';
+
+// Troca de câmera: no computador com várias câmeras cicla o dispositivo; no celular alterna frontal/traseira.
+// A nova faixa entra no lugar da antiga em cada conexão, sem refazer a chamada.
+async function trocarCamera() {
+  if (!cameraStream) return;
+  const q = QUALIDADES_CAMERA[qualidadeCamera];
+  const antiga = cameraStream;
+  let novo = null;
+  try {
+    const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+    const atual = antiga.getVideoTracks()[0].getSettings().deviceId;
+    if (cams.length > 1) {
+      const i = cams.findIndex((d) => d.deviceId === atual);
+      const prox = cams[(i + 1) % cams.length];
+      novo = await navigator.mediaDevices.getUserMedia({ video: { ...restricoesCamera(q), deviceId: { exact: prox.deviceId } }, audio: false });
+    } else {
+      facingAtual = facingAtual === 'user' ? 'environment' : 'user';
+      novo = await navigator.mediaDevices.getUserMedia({ video: { ...restricoesCamera(q), facingMode: { ideal: facingAtual } }, audio: false });
+    }
+  } catch (e) {
+    sistema('Não foi possível trocar de câmera. ' + explicarErroCamera(e));
+    return;
+  }
+
+  const faixa = novo.getVideoTracks()[0];
+  faixa.addEventListener('ended', pararCamera);
+  cameraStream = novo;
+  antiga.getTracks().forEach((t) => t.stop()); // libera a câmera antiga
+
+  // Troca a faixa em cada envio; se a conexão ainda não tem o envio, refaz a chamada
+  pares.forEach((par) => {
+    if (!par.naVoz) return;
+    const call = par.saida.camera;
+    const pc = call && call.peerConnection;
+    const sender = pc && pc.getSenders().find((s) => s.track && s.track.kind === 'video');
+    if (sender) sender.replaceTrack(faixa).catch(() => fecharChamadaDeSaida(par, 'camera'));
+    else { fecharChamadaDeSaida(par, 'camera'); chamar(par, 'camera'); }
+  });
+
+  // Atualiza a prévia; espelho só na câmera frontal
+  removerMidia('eu', 'camera');
+  mostrarMidia('eu', 'camera', novo);
+  const fig = document.querySelector('figure[data-chave="eu-camera"]');
+  if (fig && navigator.mediaDevices) fig.classList.toggle('espelho', facingAtual === 'user');
+}
+
+function pararCamera() {
+  if (!cameraStream) return;
+  cameraStream.getTracks().forEach((t) => t.stop());
+  cameraStream = null;
+  $('btn-trocar-cam').hidden = true;
+  pares.forEach((par) => fecharChamadaDeSaida(par, 'camera'));
+  transmitir({ t: 'cam-parou' });
+  removerMidia('eu', 'camera');
+  $('btn-camera').textContent = '📷 Ligar câmera';
+  $('btn-camera').classList.remove('ativo');
+  atualizarPessoas();
+}
+
+$('btn-camera').addEventListener('click', () => (cameraStream ? pararCamera() : ligarCamera()));
+
+// Trocar a qualidade com a câmera ligada: ajusta a captura e o envio de cada destinatário
+$('sel-qualidade-cam').addEventListener('change', async (e) => {
+  qualidadeCamera = e.target.value;
+  const q = QUALIDADES_CAMERA[qualidadeCamera];
+  if (!cameraStream) return;
+  const faixa = cameraStream.getVideoTracks()[0];
+  try {
+    await faixa.applyConstraints({ width: { ideal: q.largura }, height: { ideal: q.altura }, frameRate: { ideal: q.fps, max: q.fps } });
+  } catch (err) {
+    console.warn('Não foi possível mudar a captura da câmera; o envio foi limitado mesmo assim.', err);
+  }
+  pares.forEach((par) => { if (par.saida.camera) aplicarQualidadeVideo(par.saida.camera, q); });
+});
 
 /* ---- Voz ---- */
 
@@ -880,7 +1162,7 @@ async function entrarNoVoiceChat() {
   }
   // Mando minha voz só para quem já está no Voice chat. Quem entrar depois
   // avisa com "voz-entrou" e recebe a minha chamada nesse momento.
-  pares.forEach((par) => { if (par.naVoz) chamar(par, 'voice'); });
+  pares.forEach((par) => { if (par.naVoz) { chamar(par, 'voice'); chamar(par, 'camera'); } });
   transmitir({ t: 'voz-entrou' });
   $('btn-voz').textContent = '📴 Sair do Voice chat';
   $('btn-voz').classList.add('ativo');
@@ -897,6 +1179,10 @@ function sairDoVoiceChat() {
   [...entradas.keys()]
     .filter((chave) => chave.endsWith('-voice'))
     .forEach((chave) => fecharChamadaDeEntrada(chave.slice(0, -'-voice'.length), 'voice'));
+  // Sem Voice chat eu não vejo câmeras
+  [...entradas.keys()]
+    .filter((chave) => chave.endsWith('-camera'))
+    .forEach((chave) => fecharChamadaDeEntrada(chave.slice(0, -'-camera'.length), 'camera'));
   transmitir({ t: 'voz-parou' });
   $('btn-voz').textContent = '🎤 Entrar no Voice chat';
   $('btn-voz').classList.remove('ativo');
@@ -912,7 +1198,7 @@ $('btn-voz').addEventListener('click', () => (micStream ? sairDoVoiceChat() : en
 $('chk-fones').addEventListener('change', async () => {
   if (!micStream) return;
   try {
-    await micStream.getAudioTracks()[0].applyConstraints(restricoesMic());
+    await micStream.getAudioTracks()[0].applyConstraints({ echoCancellation: !$('chk-fones').checked });
   } catch (e) {
     sistema('Não consegui trocar na hora. Saia e entre de novo no Voice chat para aplicar.');
   }
@@ -968,10 +1254,13 @@ async function montarEco(ctx, faixaAudio) {
   const fonte = ctx.createMediaStreamSource(new MediaStream([faixaAudio]));
   const barramento = ctx.createGain();   // soma de todas as vozes que estou tocando
   const destino = ctx.createMediaStreamDestination();
+  const analisador = ctx.createAnalyser(); // só para o alarme de referência silenciosa
   fonte.connect(no, 0, 0);
   barramento.connect(no, 0, 1);
+  barramento.connect(analisador);
   no.connect(destino);
-  eco = { ctx, no, fonte, barramento, destino, fontes: new Map() };
+  eco = { ctx, no, fonte, barramento, destino, fontes: new Map(), analisador, silencio: 0, avisou: false, timer: null };
+  eco.timer = setInterval(verificarReferencia, 2000);
 
   // vozes que já estão tocando neste momento
   document.querySelectorAll('#audios audio').forEach((a) => {
@@ -1004,8 +1293,28 @@ function removerReferenciaEco(chave) {
   eco.fontes.delete(chave);
 }
 
+// Alarme: se as vozes do Voice chat tocam mas o filtro não recebe nada, o eco volta sem aviso.
+function verificarReferencia() {
+  if (!eco || !eco.analisador) return;
+  const tocando = [...document.querySelectorAll('#audios audio')].some((a) => a.srcObject && !a.paused);
+  if (!tocando) { eco.silencio = 0; return; }
+  const buf = new Float32Array(eco.analisador.fftSize);
+  eco.analisador.getFloatTimeDomainData(buf);
+  let soma = 0;
+  for (let i = 0; i < buf.length; i++) soma += buf[i] * buf[i];
+  const nivel = Math.sqrt(soma / buf.length);
+  eco.silencio = nivel < 1e-4 ? eco.silencio + 1 : 0;
+  // 15 checagens de 2 s = 30 s sem nenhum som. Antes disso não dá para separar silêncio de defeito.
+  if (eco.silencio >= 15 && !eco.avisou) {
+    eco.avisou = true;
+    sistema('⚠️ O filtro não está recebendo a voz das outras pessoas (30 s sem som do Voice chat). ' +
+      'Se quem assiste ouvir a própria voz, compartilhe uma guia em vez da tela inteira.');
+  }
+}
+
 function fecharEco() {
   if (!eco) return;
+  clearInterval(eco.timer);
   const ctx = eco.ctx;
   eco = null;
   ctx.close().catch(() => {});
@@ -1013,8 +1322,16 @@ function fecharEco() {
 
 /* ---- Tela ---- */
 
+function podeCompartilharTela() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+}
+
 async function compartilharTela() {
   if (iniciandoTela || telaStream) return;
+  if (!podeCompartilharTela()) {
+    sistema('Seu navegador não permite compartilhar a tela (comum em iPhone e iPad). Use um computador para transmitir.');
+    return;
+  }
   iniciandoTela = true;
   qualidadeTela = $('sel-qualidade').value;
   const q = QUALIDADES_TELA[qualidadeTela];
@@ -1101,7 +1418,11 @@ async function compartilharTela() {
     video.srcObject = telaStream;
     const legenda = document.createElement('figcaption');
     legenda.textContent = 'Sua tela (prévia)' + (temSom ? ' 🔊 com som' : ' 🔇 sem som');
-    fig.append(video, legenda);
+    const ampliar = document.createElement('button');
+    ampliar.className = 'ampliar sec';
+    ampliar.textContent = '⛶';
+    ampliar.title = 'Tela cheia';
+    fig.append(video, legenda, ampliar);
     $('videos').appendChild(fig);
     atualizarPalcoVazio();
 
@@ -1132,6 +1453,10 @@ function pararTela() {
 }
 
 $('btn-tela').addEventListener('click', () => (telaStream ? pararTela() : compartilharTela()));
+if (!podeCompartilharTela()) {
+  $('btn-tela').hidden = true;
+  $('sel-qualidade').hidden = true;
+}
 
 /* ------------------------------ Tela inicial ------------------------------ */
 
@@ -1155,9 +1480,16 @@ $('btn-copiar').addEventListener('click', async () => {
 
 // Se o link já veio com #codigo, preenche o campo
 if (location.hash.length > 1) {
-  $('codigo').value = decodeURIComponent(location.hash.slice(1));
+  try { $('codigo').value = decodeURIComponent(location.hash.slice(1)); } catch (e) { /* hash malformado: ignora */ }
 }
 
-window.addEventListener('beforeunload', () => {
-  if (peer) peer.destroy();
+// Libera a vaga ao sair. pagehide funciona melhor que beforeunload no Safari e no celular.
+window.addEventListener('pagehide', () => {
+  // Solta a câmera e o microfone (a luz do aparelho apaga)
+  if (cameraStream) cameraStream.getTracks().forEach((t) => t.stop());
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  if (peer && !peer.destroyed) { try { peer.destroy(); } catch (e) { /* já encerrado */ } }
 });
+
+$('btn-trocar-cam').addEventListener('click', trocarCamera);
+if (!podeCamera()) $('btn-camera').hidden = true; // navegador sem câmera: esconde o botão

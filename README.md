@@ -10,6 +10,10 @@ Uma sala de conversa minimalista que roda inteira no navegador: **chat, canal de
 - **Salas por código:** basta compartilhar o link (`...#codigo-da-sala`) para outras pessoas entrarem.
 - **Chat em tempo real:** as mensagens existem só enquanto a aba está aberta. Nada é gravado.
 - **Voice chat opcional:** ao entrar na sala você não ouve ninguém. Só quem clica em **Entrar no Voice chat** fala e ouve; dá para silenciar o microfone e sair quando quiser. O 🎙️ aparece ao lado de quem está no Voice chat. O áudio usa Opus em alta qualidade, com supressão de ruído.
+- **Câmera:** o botão **📷 Ligar câmera** envia seu vídeo (720p, 30 fps, sem áudio) só para quem está no Voice chat. Quem não está no Voice chat não recebe a câmera. A câmera aparece com a legenda "Câmera de …" e o 📷 ao lado do nome.
+- **Quadros de vídeo:** telas e câmeras aparecem no mesmo palco. Sua prévia da câmera é espelhada (como num espelho); o que os outros recebem fica normal. Para ampliar, use o botão ⛶ ou toque na câmera; no iPhone abre o vídeo em tela cheia do próprio aparelho.
+- **Qualidade da câmera:** o seletor escolhe 480p 15 fps (mais leve), 720p 30 fps (padrão) ou 1080p 30 fps (mais banda). Pode trocar com a câmera ligada. Cada câmera envia um vídeo separado para cada pessoa no Voice chat; com 3 ou mais pessoas o app avisa no chat e sugere 480p.
+- **Câmera e navegadores:** se a permissão for negada, sem câmera ou câmera em uso, o app diz o que fazer. Se o aparelho não aceitar a qualidade escolhida, tenta com uma configuração mais simples. 🔄 **Trocar câmera** aparece no celular (frontal/traseira) ou com mais de uma câmera. Ao desligar, o app solta a câmera e o microfone (também ao fechar a aba). Em navegadores sem suporte a câmera (ou fora de HTTPS), o botão some.
 - **Compartilhamento de tela:** transmita uma tela, janela ou aba para quem está na sala, com som, em três níveis de qualidade (1080p 60 fps, 720p 60 fps ou 1080p 30 fps).
 - **Envio de arquivos grandes:** o arquivo vai direto de um navegador para o outro, em pedaços, com barra de progresso.
 - **Imagens, vídeos e áudios no chat:** o que for enviado aparece direto no chat, com o link de download logo abaixo. Clique numa imagem para abri-la em tela cheia e clique de novo para dar zoom (arraste para mover; Esc ou ✕ para fechar). Vídeos e áudios têm play, volume, mudo e tela cheia.
@@ -52,7 +56,7 @@ O arquivo é cortado em pedaços de 64 KB e enviado pelo canal de dados do WebRT
 ## Limitações
 
 - **Tamanho da sala:** até 6 pessoas. Como todos se conectam a todos, a voz e a tela consomem mais internet de quem transmite conforme a sala cresce. Funciona melhor com 2 a 4 pessoas.
-- **Arquivos:** quem envia precisa manter a aba aberta até o fim. Quem recebe guarda o arquivo na memória antes de baixar, então arquivos de vários GB podem travar computadores com pouca RAM.
+- **Arquivos:** quem envia precisa manter a aba aberta até o fim. Quem recebe guarda o arquivo na memória antes de baixar, então arquivos de vários GB podem travar computadores com pouca RAM. O app avisa no progresso quando o arquivo passa de 400 MB no celular ou de 2 GB no computador.
 - **Redes restritivas:** em algumas redes (empresas, faculdades, certos 4G) a conexão direta pode falhar. A solução é configurar um servidor TURN (veja a seção abaixo).
 - **Dependência externa:** o servidor gratuito do PeerJS pode ficar instável ou indisponível ocasionalmente.
 
@@ -70,7 +74,9 @@ A chave fica visível no código público do site. Para uso entre amigos isso é
 ## Dicas
 
 - **Fones de ouvido:** marque "Estou de fones" para desligar o cancelamento de eco; a voz fica mais natural. Sem fones, deixe desmarcado: com o eco desligado, o som que sai das caixas de som entra no microfone e os outros ouvem.
-- **Som na transmissão de tela:** ao compartilhar, escolha "Tela inteira" e deixe ativo "Compartilhar áudio do sistema" (Windows), ou escolha uma "Guia" e ative "Compartilhar áudio da guia". Janelas e o Firefox não enviam som, e no Mac só o som de uma guia do Chrome/Edge funciona. A legenda do vídeo mostra 🔊 (com som) ou 🔇 (sem som). Se o Voice chat estiver ativo, a voz das outras pessoas que toca no seu computador é removida do som da transmissão por um filtro de cancelamento de eco (veja abaixo), então ninguém ouve a própria voz de volta, seja qualquer tela, janela ou guia. Nos primeiros segundos de conversa o filtro ainda está aprendendo e pode deixar passar um pouco de eco. Se o navegador não suportar o filtro, o app avisa no chat e a saída é compartilhar uma guia em vez da tela inteira.
+- **Som da voz bloqueado:** se o navegador bloquear o som de alguém no Voice chat, aparece no chat o botão **🔊 Ativar som da voz de …**.
+- **Celular:** iPhone e iPad não permitem compartilhar a tela no navegador; o botão some e o app explica. A tela da sala usa a altura total da tela e os botões têm pelo menos 44 px de toque.
+- **Som na transmissão de tela:** ao compartilhar, escolha "Tela inteira" e deixe ativo "Compartilhar áudio do sistema" (Windows), ou escolha uma "Guia" e ative "Compartilhar áudio da guia". Janelas e o Firefox não enviam som, e no Mac só o som de uma guia do Chrome/Edge funciona. A legenda do vídeo mostra 🔊 (com som) ou 🔇 (sem som). Se o Voice chat estiver ativo, a voz das outras pessoas que toca no seu computador é removida do som da transmissão por um filtro de cancelamento de eco (veja abaixo), então ninguém ouve a própria voz de volta, seja qualquer tela, janela ou guia. Nos primeiros segundos de conversa o filtro ainda está aprendendo e pode deixar passar um pouco de eco. Se o navegador não suportar o filtro, o app avisa no chat e a saída é compartilhar uma guia em vez da tela inteira. Se o filtro ficar 30 s sem receber a voz das outras pessoas, o app também avisa no chat.
 - **Qualidade da tela:** escolha antes de compartilhar. "1080p 30 fps" é melhor para texto e slides; "720p 60 fps" é mais leve se a internet de quem transmite for lenta.
 - **Windows diminuindo outros sons enquanto você fala:** é uma configuração do sistema. Vá em *Painel de Controle → Som → aba Comunicações* e marque "Não fazer nada".
 
